@@ -149,6 +149,7 @@ export default function App() {
       switch (event.type) {
         case 'CROSSFADER_SET':
           // Update crossfader UI state
+          console.log(`🎚️ Crossfader event: ${(event.value * 100).toFixed(0)}% (from deck ${(event as any).deck || '?'})`)
           setCrossfader(event.value)
           break
         // Note: PLAY, PAUSE, TEMPO_SET, FILTER_SWEEP are all handled by router

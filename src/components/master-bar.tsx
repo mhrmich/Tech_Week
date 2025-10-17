@@ -33,13 +33,18 @@ export function MasterBar({ crossfader, onCrossfaderChange, masterVolume, onMast
         <div className="flex-1">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-mono text-muted-foreground">CROSSFADER</span>
-            <span className="text-xs font-mono text-muted-foreground">
-              {crossfader === 0.5
-                ? "CENTER"
-                : crossfader < 0.5
-                  ? `A ${Math.round((0.5 - crossfader) * 200)}%`
-                  : `B ${Math.round((crossfader - 0.5) * 200)}%`}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-lg font-bold font-mono text-primary">
+                {Math.round(crossfader * 100)}%
+              </span>
+              <span className="text-xs font-mono text-muted-foreground">
+                {crossfader === 0.5
+                  ? "(CENTER)"
+                  : crossfader < 0.5
+                    ? `(A ${Math.round((0.5 - crossfader) * 200)}%)`
+                    : `(B ${Math.round((crossfader - 0.5) * 200)}%)`}
+              </span>
+            </div>
           </div>
           <div className="flex items-center gap-3">
             <span className="text-sm font-bold text-chart-2">A</span>
