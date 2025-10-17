@@ -137,7 +137,7 @@ export default function App() {
     }
   }
 
-  // Subscribe to gesture events
+  // Subscribe to gesture events (for display only - router handles actual control)
   useEffect(() => {
     if (!gesturesEnabled) return
 
@@ -145,57 +145,19 @@ export default function App() {
       // Update UI to show last gesture
       setLastGestureEvent(formatGestureEvent(event))
 
-      // Use the deck from the event (mirrored hand mapping: right→A, left→B)
-      // Fall back to focusedDeck for events without deck field
-      const eventDeck = (event as any).deck || focusedDeck
-      const currentDeckRef = eventDeck === "A" ? deckARef : deckBRef
-
-      // Map gesture events to deck controls
+      // Handle UI-only events (router handles all audio control directly)
       switch (event.type) {
-        case 'PLAY':
-          // Only play if not already playing (don't toggle)
-          if (audioEngine) {
-            const deck = audioEngine.getDeck(eventDeck)
-            if (!deck.isPlaying()) {
-              currentDeckRef.current?.handlePlayPause()
-            }
-          }
-          break
-        case 'PAUSE':
-          // Only pause if currently playing (don't toggle)
-          if (audioEngine) {
-            const deck = audioEngine.getDeck(eventDeck)
-            if (deck.isPlaying()) {
-              currentDeckRef.current?.handlePlayPause()
-            }
-          }
-          break
-        case 'TEMPO_SET':
-          // Map tempo to playback rate (0.8-1.2)
-          currentDeckRef.current?.handlePlaybackRateStep(
-            (event.value - 1.0) * 0.1
-          )
-          break
-        case 'FILTER_SWEEP':
-          // Map filter sweep to low/high cut
-          if (event.value < 0.5) {
-            // Low pass - decrease high cut
-            const delta = (0.5 - event.value) * 10
-            currentDeckRef.current?.handleHighCutStep(-delta)
-          } else {
-            // High pass - decrease low cut
-            const delta = (event.value - 0.5) * 10
-            currentDeckRef.current?.handleLowCutStep(-delta)
-          }
-          break
         case 'CROSSFADER_SET':
+          // Update crossfader UI state
           setCrossfader(event.value)
           break
+        // Note: PLAY, PAUSE, TEMPO_SET, FILTER_SWEEP are all handled by router
+        // The router calls engine methods directly for immediate, smooth control
       }
     })
 
     return unsubscribe
-  }, [gesturesEnabled, focusedDeck])
+  }, [gesturesEnabled])
 
   // Keyboard shortcuts
   useEffect(() => {

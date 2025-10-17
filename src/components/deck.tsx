@@ -9,6 +9,7 @@ import type { AudioTrack, DeckId } from "@/lib/types"
 import type { DeckPlayer } from "@/lib/audio-engine"
 import { resumeAudioContext } from "@/lib/audio-context"
 import { cn } from "@/lib/utils"
+import { engineA, engineB } from "@/gesture/index"
 
 interface DeckProps {
   deckId: DeckId
@@ -95,16 +96,40 @@ export const Deck = forwardRef<any, DeckProps>(
       player.setVolume(volume)
     }, [volume, player])
 
+    // Poll engine state to sync UI with gesture-controlled engines
+    useEffect(() => {
+      const engine = deckId === "A" ? engineA : engineB
+
+      const pollState = () => {
+        const actualIsPlaying = engine.isPlaying()
+        if (actualIsPlaying !== isPlaying) {
+          setIsPlaying(actualIsPlaying)
+        }
+
+        // Also sync playback rate display
+        const state = engine.getState()
+        if (Math.abs(state.tempoFactor - playbackRate) > 0.01) {
+          setPlaybackRate(state.tempoFactor)
+        }
+      }
+
+      // Poll every 100ms to keep UI in sync
+      const interval = setInterval(pollState, 100)
+      return () => clearInterval(interval)
+    }, [deckId, isPlaying, playbackRate])
+
     const handlePlayPause = () => {
       if (!track) return
 
       resumeAudioContext()
 
+      // Control the actual Tone.js engine directly (same as gestures do)
+      const engine = deckId === "A" ? engineA : engineB
       if (isPlaying) {
-        player.pause()
+        engine.pause()
         setIsPlaying(false)
       } else {
-        player.play()
+        engine.play()
         setIsPlaying(true)
       }
     }
