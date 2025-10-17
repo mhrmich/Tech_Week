@@ -1,6 +1,9 @@
 /**
  * Event bus for DJ gesture events.
  * Simple pub/sub system with no external dependencies.
+ *
+ * D1: Events now support optional `deck?: DeckID` field.
+ * D5 TODO: Add deck-aware routing (filter events by deck for subscribers).
  */
 
 import type { DJEvent } from './types';

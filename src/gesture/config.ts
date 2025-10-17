@@ -1,6 +1,7 @@
 /**
  * Centralized configuration for gesture detection tuning.
  * All thresholds, gains, debounces, and rate limits in one place.
+ * D5: Added dual-hand mapping and 3-finger blend mode.
  */
 
 export type GestureConfig = {
@@ -38,6 +39,20 @@ export type GestureConfig = {
   videoHeight: number; // assumed video height in pixels
   activeZoneMargin: number; // margin fraction (0.1 = 10% on each side)
 
+  // D5: Dual-hand mapping (mirrored camera: right hand → Deck A, left hand → Deck B)
+  handToDeck: { left: "B"; right: "A" }; // right hand → Deck A, left hand → Deck B
+
+  // D5: 3-finger blend mode (both hands control their respective deck's master level)
+  blendHoldMs: number; // hold duration to enter blend mode
+  blendRateHz: number; // emit rate while blending (Hz)
+  blendSmoothingAlpha: number; // EMA smoothing factor for blend value
+  blendMode: "independent" | "crossfade"; // "independent" = each deck separate, "crossfade" = inverse link
+  verticalDeadzone: number; // deadzone for vertical motion (reduces jitter)
+
+  // D6: Tempo sync
+  autoSyncTempo: boolean; // auto-sync Deck B tempo to Deck A when loading/playing
+  tempoSyncSmoothMs: number; // smooth tempo transition duration (ms)
+
   // Stem separation API (optional)
   stemApiBase?: string; // base URL for stem separation API
   stemApiKey?: string; // API key for stem separation service
@@ -70,6 +85,18 @@ export const defaultConfig: Readonly<GestureConfig> = Object.freeze({
   videoWidth: 640,
   videoHeight: 480,
   activeZoneMargin: 0.1,
+  // D5: Dual-hand mapping (mirrored: right → A, left → B)
+  handToDeck: { left: "B" as const, right: "A" as const },
+  // D5: 3-finger blend mode (both hands)
+  blendHoldMs: 400,
+  blendRateHz: 15,
+  blendSmoothingAlpha: 0.4,
+  blendMode: "crossfade" as const, // Enable crossfade by default
+  verticalDeadzone: 0.05,
+  // D6: Tempo sync
+  autoSyncTempo: true, // Auto-sync Deck B to Deck A by default
+  tempoSyncSmoothMs: 200, // 200ms smooth transition
+  // Stem separation
   stemMockEnabled: true, // default: true for dev
   stemMockDelayMs: 2000, // default: 2s fake delay
 });

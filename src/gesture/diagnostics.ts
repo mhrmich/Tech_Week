@@ -1,18 +1,26 @@
 /**
  * Headless diagnostics module for gesture system monitoring.
  * Tracks FPS, dropped frames, gesture modes, and event counts.
+ * D5: Enhanced to track both hands (Deck A / Deck B) independently.
  */
 
-import type { DJEvent } from "./types";
+import type { DJEvent, DeckID } from "./types";
 import type { GestureMode } from "./modes";
 import { subscribe } from "./bus";
-import { getBpms } from "./audioEngine";
+// D2: BPM tracking removed (was part of GV3 guest vocals)
+
+export type HandModeInfo = {
+  handedness: "left" | "right";
+  deck: DeckID;
+  mode: GestureMode;
+};
 
 export type DiagnosticsSnapshot = {
   enabled: boolean;
   fps: number;
   droppedFrames: number;
-  mode: GestureMode | "idle";
+  mode: GestureMode | "idle"; // Kept for backward compatibility
+  handModes: HandModeInfo[]; // D5: Per-hand mode tracking
   eventCounts: Record<string, number>;
   lastPrintedAt: number;
 };
@@ -22,7 +30,8 @@ export type DiagnosticsSnapshot = {
 // ============================================================================
 
 let _enabled = false;
-let _mode: GestureMode | "idle" = "idle";
+let _mode: GestureMode | "idle" = "idle"; // Kept for backward compatibility
+let _handModes: HandModeInfo[] = []; // D5: Track both hands independently
 let _printEveryMs = 2000;
 let _fpsWindowMs = 1000;
 let _lastPrintedAt = 0;
@@ -95,10 +104,17 @@ export function tickFrame(ts: number): void {
 }
 
 /**
- * Set the current gesture mode.
+ * Set the current gesture mode (backward compatibility, single hand).
  */
 export function setMode(mode: GestureMode | "idle"): void {
   _mode = mode;
+}
+
+/**
+ * D5: Set gesture modes for all detected hands.
+ */
+export function setHandModes(modes: HandModeInfo[]): void {
+  _handModes = modes;
 }
 
 /**
@@ -135,6 +151,7 @@ export function getSnapshot(): Readonly<DiagnosticsSnapshot> {
     fps,
     droppedFrames: _droppedFrames,
     mode: _mode,
+    handModes: [..._handModes],
     eventCounts: { ..._eventCounts },
     lastPrintedAt: _lastPrintedAt,
   });
@@ -146,9 +163,25 @@ export function getSnapshot(): Readonly<DiagnosticsSnapshot> {
 
 /**
  * Print compact diagnostics line.
+ * D5: Shows dual-hand status (Deck A / Deck B) when available.
  */
-function printDiagnostics(ts: number): void {
+function printDiagnostics(_ts: number): void {
   const fps = _frameTimes.length * (1000 / _fpsWindowMs);
+
+  // D5: Format hand modes if available
+  let handStatus = "";
+  if (_handModes.length > 0) {
+    const deckA = _handModes.find((h) => h.deck === "A");
+    const deckB = _handModes.find((h) => h.deck === "B");
+
+    const aPart = deckA ? `A: mode=${deckA.mode}` : "A: idle";
+    const bPart = deckB ? `B: mode=${deckB.mode}` : "B: idle";
+
+    handStatus = `${aPart} | ${bPart}`;
+  } else {
+    // Fallback to single-hand mode for backward compatibility
+    handStatus = `mode: ${_mode}`;
+  }
 
   // Format event counts
   const eventParts: string[] = [];
@@ -164,15 +197,10 @@ function printDiagnostics(ts: number): void {
     }
   }
 
-  const eventSummary = eventParts.join(" / ");
-
-  // Get BPM settings
-  const bpms = getBpms();
-  const masterBpmStr = bpms.master !== null ? bpms.master.toString() : "—";
-  const guestBpmStr = bpms.guest !== null ? bpms.guest.toString() : "—";
+  const eventSummary = eventParts.length > 0 ? eventParts.join(" / ") : "none";
 
   console.log(
-    `diag | fps: ${fps.toFixed(1)} | dropped: ${_droppedFrames} | mode: ${_mode} | bpm M:${masterBpmStr} G:${guestBpmStr} | events: ${eventSummary}`
+    `diag | ${handStatus} | fps: ${fps.toFixed(1)} | dropped: ${_droppedFrames} | events: ${eventSummary}`
   );
 }
 

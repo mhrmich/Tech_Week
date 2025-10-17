@@ -1,132 +1,158 @@
 /**
  * Gesture mode state machines.
  * Interprets postures into continuous or discrete DJ events.
+ *
+ * D1: Events now support optional `deck?: DeckID` field.
+ * D5: Per-hand processing with deck tagging (left → A, right → B).
+ *     Added 3-finger blend mode for right hand → Deck B master level.
  */
 
-import { PostureDetector, type Posture } from "./posture";
+import { PostureDetector } from "./posture";
 import { emit } from "./bus";
-import { normalizeLandmarks } from "./normalize";
 import { mapRange, clamp } from "./normalize";
 import type { HandDetection } from "./mediapipe";
 import { getConfig } from "./config";
+import type { DeckID } from "./types";
 
-export type GestureMode = "idle" | "transport" | "pinch2D" | "stems";
+export type GestureMode = "idle" | "transport" | "pinch2D" | "stems" | "blend";
 
 /**
- * Gesture mode detector with mutual exclusion and rate limiting.
- * Processes hand postures into DJ control events.
+ * Per-hand state tracking for independent gesture processing.
  */
-export class GestureModes {
-  private posture = new PostureDetector();
-  private mode: GestureMode = "idle";
-  private lastContinuousEmit = 0; // for rate limiting continuous events
+class HandState {
+  handedness: "left" | "right";
+  deck: DeckID;
+  mode: GestureMode = "idle";
+  posture = new PostureDetector();
 
-  // Track previous positions for pinch2D delta calculations
-  private prevThumbTip: { x: number; y: number } | null = null;
+  // Pinch tracking
+  pinchStartTime: number | null = null;
+  lastContinuousEmit = 0;
+  prevThumbTip: { x: number; y: number } | null = null;
 
-  // Transport hold tracking
-  private transportHoldStartTime: number | null = null;
-  private lastTransportState: "palm" | "fist" | null = null;
-  private lastTransportEmit = 0;
+  // Transport tracking
+  transportHoldStartTime: number | null = null;
+  lastTransportState: "palm" | "fist" | null = null;
+  lastTransportEmit = 0;
 
-  // Pinch activation tracking
-  private pinchStartTime: number | null = null;
+  // Stem toggle tracking
+  stemStates = { vocals: true, drums: true, bass: true };
+  lastStemFingerCount = 0;
+  lastStemToggle = 0;
+  stemHoldStartTime: number | null = null;
+  stemHoldFingerCount: number | null = null;
+  stemToggleFired: boolean = false;
 
-  // Stem toggle state (track which stems are enabled)
-  private stemStates = {
-    vocals: true,
-    drums: true,
-    bass: true,
-  };
-  private lastStemFingerCount = 0;
-  private lastStemToggle = 0;
-  private stemHoldStartTime: number | null = null;
-  private stemHoldFingerCount: number | null = null;
-  private stemToggleFired: boolean = false; // Track if toggle already fired for current hold
+  // Blend tracking (3-finger mode for right hand → Deck B)
+  blendActive: boolean = false;
+  blendHoldStartTime: number | null = null;
+  blendValue: number = 0.5; // EMA-smoothed blend value (0..1)
+  lastBlendEmit = 0;
+
+  constructor(handedness: "left" | "right", deck: DeckID) {
+    this.handedness = handedness;
+    this.deck = deck;
+  }
 
   /**
    * Update gesture mode based on hand detection.
    * Mode priority (highest to lowest):
    * 1. Pinch → "pinch2D"
    * 2. Palm/Fist (with hold) → "transport"
-   * 3. FingerCount 1/2/3 → "stems"
-   *
-   * @param det - Hand detection from MediaPipe
+   * 3. 3 fingers (right hand only, with hold) → "blend"
+   * 4. FingerCount 1/2 → "stems"
+   * 5. Idle
    */
   update(det: HandDetection): void {
-    // Get posture states
     const p = this.posture.update(det);
+    const now = performance.now();
 
-    // Absolute coordinates for pinch2D position
+    // Absolute coordinates for pinch2D and blend
     const absIndexTip = det.landmarks[8];
     const absThumbTip = det.landmarks[4];
 
     // Reset mode to idle each frame
     this.mode = "idle";
 
-    // Mode priority: check highest priority first
-
+    // Priority 1: Pinch2D (highest priority - blocks all others)
     if (p.pinch) {
-      // Priority 1: Pinch2D mode (use absolute coordinates)
       this.mode = "pinch2D";
-      this.handlePinch2D(absIndexTip, absThumbTip);
-      // Reset transport and stem state when in pinch
+      this.handlePinch2D(absIndexTip, absThumbTip, now);
+      // Reset other modes
       this.transportHoldStartTime = null;
       this.lastTransportState = null;
-      this.lastStemFingerCount = 0;
       this.stemHoldStartTime = null;
       this.stemHoldFingerCount = null;
       this.stemToggleFired = false;
-    } else if (p.palm || p.fist) {
-      // Priority 2: Transport mode (with hold + cooldown)
-      this.mode = "transport";
-      this.handleTransport(p.palm, p.fist);
-      this.lastStemFingerCount = 0;
-      this.pinchStartTime = null;
-      this.stemHoldStartTime = null;
-      this.stemHoldFingerCount = null;
-      this.stemToggleFired = false;
-    } else if (p.fingerCount >= 1 && p.fingerCount <= 3) {
-      // Priority 3: Stems mode (1 or 2 fingers; 3 fingers ignored)
-      this.mode = "stems";
-      this.handleStems(p.fingerCount);
-      // Reset transport and pinch state when in stems
-      this.transportHoldStartTime = null;
-      this.lastTransportState = null;
-      this.pinchStartTime = null;
-    } else {
-      // No gesture detected - reset state
-      this.transportHoldStartTime = null;
-      this.lastTransportState = null;
-      this.lastStemFingerCount = 0;
-      this.pinchStartTime = null;
-      this.stemHoldStartTime = null;
-      this.stemHoldFingerCount = null;
-      this.stemToggleFired = false;
+      this.blendActive = false;
+      this.blendHoldStartTime = null;
+      return;
     }
 
-    // Update previous positions for next frame (if in continuous mode)
-    if (this.mode === "pinch2D") {
-      this.prevThumbTip = { x: absThumbTip.x, y: absThumbTip.y };
+    // Priority 2: Transport (palm/fist with hold)
+    if (p.palm || p.fist) {
+      this.mode = "transport";
+      this.handleTransport(p.palm, p.fist, now);
+      // Reset other modes
+      this.pinchStartTime = null;
+      this.stemHoldStartTime = null;
+      this.stemHoldFingerCount = null;
+      this.stemToggleFired = false;
+      this.blendActive = false;
+      this.blendHoldStartTime = null;
+      return;
     }
+
+    // Priority 3: Blend mode (3 fingers, both hands)
+    // D6: Enable 3-finger blend for both hands to control their respective deck's master volume
+    if (p.fingerCount === 3) {
+      this.mode = "blend";
+      this.handleBlend(absIndexTip, now);
+      // Reset other modes
+      this.pinchStartTime = null;
+      this.transportHoldStartTime = null;
+      this.lastTransportState = null;
+      this.stemHoldStartTime = null;
+      this.stemHoldFingerCount = null;
+      this.stemToggleFired = false;
+      return;
+    }
+
+    // Priority 4: Stem toggles (1 or 2 fingers)
+    if (p.fingerCount >= 1 && p.fingerCount <= 2) {
+      this.mode = "stems";
+      this.handleStems(p.fingerCount, now);
+      // Reset other modes
+      this.pinchStartTime = null;
+      this.transportHoldStartTime = null;
+      this.lastTransportState = null;
+      this.blendActive = false;
+      this.blendHoldStartTime = null;
+      return;
+    }
+
+    // Priority 5: Idle - reset all state
+    this.pinchStartTime = null;
+    this.transportHoldStartTime = null;
+    this.lastTransportState = null;
+    this.stemHoldStartTime = null;
+    this.stemHoldFingerCount = null;
+    this.stemToggleFired = false;
+    this.blendActive = false;
+    this.blendHoldStartTime = null;
   }
 
   /**
    * Transport mode: sustained PLAY/PAUSE with hold + cooldown.
-   * Palm must be held for transportHoldMs to trigger PLAY.
-   * Fist must be held for transportHoldMs to trigger PAUSE.
-   * After firing, cooldown prevents another event for transportCooldownMs.
    */
-  private handleTransport(palm: boolean, fist: boolean): void {
+  private handleTransport(palm: boolean, fist: boolean, now: number): void {
     const cfg = getConfig();
-    const now = performance.now();
 
-    // Check cooldown - prevent events during cooldown period
+    // Check cooldown
     if (now - this.lastTransportEmit < cfg.transportCooldownMs) {
       return;
     }
 
-    // Determine current state
     const currentState = palm ? "palm" : fist ? "fist" : null;
 
     // If state changed, reset hold timer
@@ -136,13 +162,11 @@ export class GestureModes {
       return;
     }
 
-    // If no valid state, clear hold
     if (!currentState) {
       this.transportHoldStartTime = null;
       return;
     }
 
-    // Check if hold duration met
     if (this.transportHoldStartTime === null) {
       this.transportHoldStartTime = now;
       return;
@@ -150,48 +174,42 @@ export class GestureModes {
 
     const holdDuration = now - this.transportHoldStartTime;
     if (holdDuration < cfg.transportHoldMs) {
-      // Still holding, not long enough yet
       return;
     }
 
-    // Hold threshold met - emit event
+    // Hold threshold met - emit event with deck tag
     if (palm) {
-      emit({ type: "PLAY" });
+      emit({ type: "PLAY", deck: this.deck });
       this.lastTransportEmit = now;
-      // Reset to prevent repeated firing
       this.transportHoldStartTime = null;
     } else if (fist) {
-      emit({ type: "PAUSE" });
+      emit({ type: "PAUSE", deck: this.deck });
       this.lastTransportEmit = now;
-      // Reset to prevent repeated firing
       this.transportHoldStartTime = null;
     }
   }
 
   /**
    * Pinch2D mode: continuous TEMPO_SET + FILTER_SWEEP.
-   * - Vertical indexTip.y (absolute camera position) → TEMPO_SET
-   * - Horizontal thumbTip.x (absolute camera position) → FILTER_SWEEP
    * Requires holding pinch for pinchActivationMs before activating.
-   * Rate-limited based on config.
    */
   private handlePinch2D(
     indexTip: { x: number; y: number },
-    thumbTip: { x: number; y: number }
+    thumbTip: { x: number; y: number },
+    now: number
   ): void {
     const cfg = getConfig();
-    const now = performance.now();
 
     // Track pinch start time
     if (this.pinchStartTime === null) {
       this.pinchStartTime = now;
-      return; // Wait for hold threshold
+      return;
     }
 
     // Check if pinch has been held long enough
     const holdDuration = now - this.pinchStartTime;
     if (holdDuration < cfg.pinchActivationMs) {
-      return; // Still waiting for activation threshold
+      return;
     }
 
     // Rate limit continuous events
@@ -199,58 +217,126 @@ export class GestureModes {
     if (now - this.lastContinuousEmit < intervalMs) return;
     this.lastContinuousEmit = now;
 
-    // Define active range (central area where hand typically appears)
+    // Define active range
     const xMin = cfg.videoWidth * cfg.activeZoneMargin;
     const xMax = cfg.videoWidth * (1 - cfg.activeZoneMargin);
     const yMin = cfg.videoHeight * cfg.activeZoneMargin;
     const yMax = cfg.videoHeight * (1 - cfg.activeZoneMargin);
 
-    // Map indexTip.y (vertical position) to TEMPO_SET
-    // y in pixel space: 0 = top, height = bottom
-    // Top of frame (low y) → faster tempo (max)
-    // Bottom of frame (high y) → slower tempo (min)
+    // Map vertical position to tempo
     const tempo = mapRange(indexTip.y, yMin, yMax, cfg.tempoMax, cfg.tempoMin);
     const tempoClamp = clamp(tempo, cfg.tempoMin, cfg.tempoMax);
 
-    // Map thumbTip.x (horizontal position) to FILTER_SWEEP
-    // x in pixel space: 0 = left, width = right
+    // Map horizontal position to filter
     const filter = mapRange(thumbTip.x, xMin, xMax, cfg.filterMin, cfg.filterMax);
     const filterClamp = clamp(filter, cfg.filterMin, cfg.filterMax);
 
-    // Emit both events
-    emit({ type: "TEMPO_SET", value: tempoClamp });
-    emit({ type: "FILTER_SWEEP", value: filterClamp });
+    // Emit events with deck tag
+    emit({ type: "TEMPO_SET", value: tempoClamp, deck: this.deck });
+    emit({ type: "FILTER_SWEEP", value: filterClamp, deck: this.deck });
+
+    // Update previous position
+    this.prevThumbTip = { x: thumbTip.x, y: thumbTip.y };
+  }
+
+  /**
+   * Blend mode: 3-finger hold (both hands) → deck-specific master level control.
+   * Vertical motion sets that deck's "master" level continuously (0..1).
+   * D6: Supports both "independent" and "crossfade" modes.
+   * - "independent": Each deck's volume is independent
+   * - "crossfade": Raising one deck automatically lowers the other (inverse link)
+   */
+  private handleBlend(indexTip: { x: number; y: number }, now: number): void {
+    const cfg = getConfig();
+
+    // Entry: hold 3 fingers for blendHoldMs
+    if (!this.blendActive) {
+      if (this.blendHoldStartTime === null) {
+        this.blendHoldStartTime = now;
+        return;
+      }
+
+      const holdDuration = now - this.blendHoldStartTime;
+      if (holdDuration < cfg.blendHoldMs) {
+        return; // Still holding, not long enough yet
+      }
+
+      // Entered blend mode
+      this.blendActive = true;
+      console.log(`🎚️ [${this.deck}] Entered blend mode (3-finger hold)`);
+    }
+
+    // Rate limit blend events
+    const intervalMs = 1000 / cfg.blendRateHz;
+    if (now - this.lastBlendEmit < intervalMs) return;
+    this.lastBlendEmit = now;
+
+    // Map vertical position to [0, 1]
+    const yMin = cfg.videoHeight * cfg.activeZoneMargin;
+    const yMax = cfg.videoHeight * (1 - cfg.activeZoneMargin);
+
+    // Vertical position: top (low y) = 1.0, bottom (high y) = 0.0
+    let rawValue = mapRange(indexTip.y, yMin, yMax, 1.0, 0.0);
+    rawValue = clamp(rawValue, 0, 1);
+
+    // Apply vertical deadzone (reduce jitter near 0.5)
+    const center = 0.5;
+    if (Math.abs(rawValue - center) < cfg.verticalDeadzone) {
+      rawValue = center;
+    }
+
+    // Apply EMA smoothing
+    const alpha = cfg.blendSmoothingAlpha;
+    this.blendValue = alpha * rawValue + (1 - alpha) * this.blendValue;
+
+    // Emit event based on blend mode
+    if (cfg.blendMode === "independent") {
+      // Independent mode: control this deck's master gain only
+      emit({
+        type: "STEM_LEVEL",
+        stem: "master" as any,
+        value: this.blendValue,
+        deck: this.deck,
+      });
+    } else if (cfg.blendMode === "crossfade") {
+      // Crossfade mode: emit CROSSFADER_SET event
+      // Router will handle inverse volume linking
+      // Value represents this deck's desired level
+      const crossfadeValue = this.deck === "A" ? this.blendValue : 1.0 - this.blendValue;
+      emit({
+        type: "CROSSFADER_SET",
+        value: crossfadeValue,
+        deck: this.deck, // Tag which deck is controlling the crossfader
+      });
+    }
   }
 
   /**
    * Stems mode: toggle stems based on finger count.
    * 1 finger → vocals
    * 2 fingers → instrumental (drums + bass together)
-   * 3 fingers → nothing (ignored)
    * Requires holding for stemToggleHoldMs before toggling.
-   * Only toggles ONCE per continuous hold - must release and hold again to toggle back.
+   * Only toggles ONCE per continuous hold.
    */
-  private handleStems(fingerCount: number): void {
+  private handleStems(fingerCount: number, now: number): void {
     const cfg = getConfig();
-    const now = performance.now();
 
-    // Only handle 1 or 2 fingers (3 fingers does nothing)
+    // Only handle 1 or 2 fingers
     if (fingerCount < 1 || fingerCount > 2) return;
 
     // If finger count changed, reset hold tracking
     if (fingerCount !== this.stemHoldFingerCount) {
       this.stemHoldStartTime = now;
       this.stemHoldFingerCount = fingerCount;
-      this.stemToggleFired = false; // Reset toggle flag for new gesture
+      this.stemToggleFired = false;
       return;
     }
 
-    // If toggle already fired for this hold, don't toggle again
+    // If toggle already fired, wait for release
     if (this.stemToggleFired) {
-      return; // Wait until gesture is released and re-held
+      return;
     }
 
-    // Check if hold duration met
     if (this.stemHoldStartTime === null) {
       this.stemHoldStartTime = now;
       return;
@@ -258,43 +344,105 @@ export class GestureModes {
 
     const holdDuration = now - this.stemHoldStartTime;
     if (holdDuration < cfg.stemToggleHoldMs) {
-      return; // Still holding, not long enough yet
+      return;
     }
 
-    // Hold threshold met - emit toggle ONCE
+    // Hold threshold met - emit toggle ONCE with deck tag
     if (fingerCount === 1) {
       // Toggle vocals
       this.stemStates.vocals = !this.stemStates.vocals;
-      emit({ type: "STEM_TOGGLE", stem: "vocals", enabled: this.stemStates.vocals });
+      emit({
+        type: "STEM_TOGGLE",
+        stem: "vocals",
+        enabled: this.stemStates.vocals,
+        deck: this.deck,
+      });
     } else if (fingerCount === 2) {
       // Toggle instrumental (drums + bass together)
       const newState = !this.stemStates.drums;
       this.stemStates.drums = newState;
       this.stemStates.bass = newState;
 
-      // Emit both events
-      emit({ type: "STEM_TOGGLE", stem: "drums", enabled: newState });
-      emit({ type: "STEM_TOGGLE", stem: "bass", enabled: newState });
+      emit({ type: "STEM_TOGGLE", stem: "drums", enabled: newState, deck: this.deck });
+      emit({ type: "STEM_TOGGLE", stem: "bass", enabled: newState, deck: this.deck });
     }
 
-    // Mark toggle as fired - prevents repeated toggling while holding
     this.stemToggleFired = true;
     this.lastStemFingerCount = fingerCount;
     this.lastStemToggle = now;
   }
+}
+
+/**
+ * Gesture mode detector with per-hand state tracking.
+ * Processes multiple hands independently and emits deck-tagged events.
+ */
+export class GestureModes {
+  private hands: Map<string, HandState> = new Map();
 
   /**
-   * Get the current active gesture mode.
-   * Useful for debugging and UI visualization.
+   * Update gesture modes for all detected hands.
+   * Each hand is processed independently with its own state machine.
+   *
+   * @param detections - Array of hand detections from MediaPipe
    */
-  getMode(): GestureMode {
-    return this.mode;
+  update(detections: HandDetection[]): void {
+    const cfg = getConfig();
+    const activeHands = new Set<string>();
+
+    // Process each detected hand
+    for (const det of detections) {
+      // Get hand identifier and deck mapping
+      const handedness = det.handedness.toLowerCase() as "left" | "right";
+      const deck = cfg.handToDeck[handedness] || "A"; // Default to A if unknown
+
+      // Get or create hand state
+      if (!this.hands.has(handedness)) {
+        this.hands.set(handedness, new HandState(handedness, deck));
+      }
+
+      const handState = this.hands.get(handedness)!;
+      handState.update(det);
+      activeHands.add(handedness);
+    }
+
+    // Clean up hands that are no longer detected
+    for (const [key, _] of this.hands) {
+      if (!activeHands.has(key)) {
+        this.hands.delete(key);
+      }
+    }
+  }
+
+  /**
+   * Get the current active gesture mode for a specific hand.
+   * Useful for debugging and diagnostics.
+   */
+  getMode(handedness: "left" | "right" = "left"): GestureMode {
+    return this.hands.get(handedness)?.mode || "idle";
+  }
+
+  /**
+   * Get all active hands and their modes.
+   * Useful for diagnostics display.
+   */
+  getAllModes(): { handedness: "left" | "right"; deck: DeckID; mode: GestureMode }[] {
+    const result: { handedness: "left" | "right"; deck: DeckID; mode: GestureMode }[] = [];
+    for (const [_key, state] of this.hands) {
+      result.push({
+        handedness: state.handedness,
+        deck: state.deck,
+        mode: state.mode,
+      });
+    }
+    return result;
   }
 }
 
 /**
  * Start the gesture modes loop.
  * Connects camera/MediaPipe detection to the GestureModes state machine.
+ * D5: Now processes all detected hands, not just the first one.
  *
  * @param detector - GestureModes instance (creates new if not provided)
  * @param intervalMs - Unused (uses RAF, kept for API compatibility)
@@ -302,16 +450,15 @@ export class GestureModes {
  */
 export async function startModesLoop(
   detector = new GestureModes(),
-  intervalMs = 33
+  _intervalMs = 33
 ): Promise<GestureModes> {
   const cam = await import("./camera");
   const mp = await import("./mediapipe");
 
   const loop = () => {
     const hands = mp.detectHands(cam.getVideoElement());
-    if (hands.length) {
-      detector.update(hands[0]);
-    }
+    // D5: Process ALL hands, not just hands[0]
+    detector.update(hands);
     requestAnimationFrame(loop);
   };
 

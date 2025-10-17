@@ -1,166 +1,36 @@
 /**
- * Headless audio engine for DJ gesture control with multi-stem support.
- * Uses Tone.js to manipulate audio based on event bus.
+ * D2: Dual-deck audio engine with independent DeckAudioEngine instances.
+ * Each deck owns its players, gains, filter, and position clock.
+ * D3: Added synchronized timing methods and orchestrator functions.
+ * No event bus wiring yet (that's D4).
  */
 
 import * as Tone from "tone";
-import type { DJEvent } from "./types";
-import { subscribe } from "./bus";
+import { getConfig } from "./config";
 
-export type Stems = { vocals: string; drums: string; bass: string };
-
-// ============================================================================
-// Module State
-// ============================================================================
-
-let _audioInitialized = false;
-let _busSubscribed = false;
-
-// Stem players and per-stem gains
-let _players: { vocals: Tone.Player; drums: Tone.Player; bass: Tone.Player } | null = null;
-let _gains: { vocals: Tone.Gain; drums: Tone.Gain; bass: Tone.Gain } | null = null;
-
-// Shared mix and filter nodes
-let _mixGain: Tone.Gain | null = null;
-let _filter: Tone.Filter | null = null;
-
-// Playback state tracking
-let _loaded = false;
-let _playing = false;
-let _lastStartWallTime = 0;
-let _lastStartOffsetSec = 0;
-let _playbackRate = 1.0;
-
-// Stem mute states
-let _stemStates = { vocals: true, drums: true, bass: true };
-
-// Guest vocals player, gain, and state
-let _guestPlayer: Tone.Player | null = null;
-let _guestGain: Tone.Gain | null = null;
-let _guestLoaded = false;
-let _guestObjectUrl: string | null = null; // Track object URLs for cleanup
-
-// BPM state for tempo matching
-let _masterBpm: number | null = null;
-let _guestBpm: number | null = null;
-let _tempoFactor = 1.0; // Current tempo factor from TEMPO_SET (default 1.0)
-let _guestBpmWarningLogged = false; // Track if we've already logged BPM warning
+export type Stems = { vocals?: string; drums?: string; bass?: string };
+export type TrackSource = { url?: string; file?: File | Blob };
 
 // ============================================================================
-// Rate Calculation Helpers
+// Global Tone.js State (shared across decks)
 // ============================================================================
 
-/**
- * Calculate playback rate for master stems.
- * Master rate is simply the tempo factor.
- */
-function masterRate(): number {
-  return _tempoFactor;
-}
+let _toneStarted = false;
 
-/**
- * Calculate playback rate for guest vocals.
- * Guest rate = tempoFactor * (masterBpm / guestBpm) if both BPMs are known.
- * Otherwise falls back to master rate (1:1 ratio).
- */
-function guestRate(): number {
-  if (!_guestBpm || !_masterBpm) {
-    // Fall back to master rate if BPMs are unknown
-    if (_guestLoaded && !_guestBpmWarningLogged) {
-      console.log("ℹ️ Guest BPM unknown → using masterRate()");
-      _guestBpmWarningLogged = true;
-    }
-    return _tempoFactor;
-  }
-
-  if (_guestBpm <= 0) {
-    // Guard against invalid BPM
-    return _tempoFactor;
-  }
-
-  return _tempoFactor * (_masterBpm / _guestBpm);
-}
-
-/**
- * Apply current rates to all loaded players.
- * Call this whenever BPM or tempo factor changes.
- */
-function applyRates(): void {
-  const master = masterRate();
-  const guest = guestRate();
-
-  // Apply to main stems
-  if (_players?.vocals.buffer.loaded) _players.vocals.playbackRate = master;
-  if (_players?.drums.buffer.loaded) _players.drums.playbackRate = master;
-  if (_players?.bass.buffer.loaded) _players.bass.playbackRate = master;
-
-  // Apply to guest
-  if (_guestPlayer?.buffer.loaded) {
-    _guestPlayer.playbackRate = guest;
-  }
-
-  // Update tracked playback rate (for position calculation)
-  _playbackRate = master;
-}
-
-// ============================================================================
-// Public API
-// ============================================================================
-
-/**
- * Initialize audio context and setup audio graph.
- * Must be called from a user gesture (browser autoplay policy).
- */
-export async function initAudio(): Promise<void> {
-  if (_audioInitialized) {
-    console.warn("Audio already initialized");
-    return;
-  }
-
-  try {
-    // Start Tone context (requires user gesture)
-    await Tone.start();
-    console.log("🔊 Audio context started");
-
-    // Create shared nodes
-    _filter = new Tone.Filter({
-      type: "lowpass",
-      frequency: 8000,
-      rolloff: -24,
-    });
-
-    _mixGain = new Tone.Gain(1);
-
-    // Connect: MixGain → Filter → Destination
-    _mixGain.connect(_filter);
-    _filter.toDestination();
-
-    _audioInitialized = true;
-
-    // Subscribe to event bus once
-    if (!_busSubscribed) {
-      subscribe(handleEvent);
-      _busSubscribed = true;
-      console.log("🔊 Audio engine subscribed to event bus");
-    }
-  } catch (error) {
-    throw new Error(
-      `Failed to initialize audio. Ensure this is called from a user gesture (click/tap). Error: ${error}`
-    );
-  }
+async function ensureToneStarted(): Promise<void> {
+  if (_toneStarted) return;
+  await Tone.start();
+  _toneStarted = true;
+  console.log("🔊 Tone.js audio context started");
 }
 
 /**
  * Verify that an audio URL is accessible.
- * Note: blob: URLs (from uploaded files) are always considered valid.
+ * Blob URLs are always considered valid.
  */
-async function verifyAudio(url: string): Promise<boolean> {
-  // Blob URLs (from uploaded files) are always valid
-  if (url.startsWith("blob:")) {
-    return true;
-  }
+async function verifyAudioUrl(url: string): Promise<boolean> {
+  if (url.startsWith("blob:")) return true;
 
-  // For HTTP URLs, verify with HEAD request
   try {
     const res = await fetch(url, { method: "HEAD" });
     return res.ok;
@@ -169,517 +39,667 @@ async function verifyAudio(url: string): Promise<boolean> {
   }
 }
 
+// ============================================================================
+// DeckAudioEngine Class
+// ============================================================================
+
 /**
- * Load three stems (vocals, drums, bass) for synchronized playback.
+ * Independent audio engine for one deck (A or B).
+ * Handles stems or full-mix playback with independent tempo/filter/gains.
  */
-export async function loadStems(stems: Stems): Promise<void> {
-  if (!_audioInitialized) {
-    throw new Error("Audio not initialized. Call initAudio() first.");
+export class DeckAudioEngine {
+  // Deck identity
+  private id: "A" | "B";
+
+  // Audio nodes
+  private players: Map<string, Tone.Player> = new Map();
+  private stemGains: Map<string, Tone.Gain> = new Map();
+  private stemsMixGain: Tone.Gain | null = null;
+  private filter: Tone.Filter | null = null;
+  private masterGain: Tone.Gain | null = null;
+  private limiter: Tone.Limiter | null = null;
+
+  // State
+  private loaded = false;
+  private playing = false;
+  private tempoFactor = 1.0;
+  private filterValue = 0.5; // 0..1 (0=lowpass min, 0.5=neutral, 1=highpass max)
+  private masterGainValue = 1.0;
+  private stemStates: Map<string, boolean> = new Map(); // enabled state
+
+  // Transport clock
+  private lastStartWallTime = 0;
+  private lastStartOffsetSec = 0;
+
+  // Object URLs for cleanup
+  private objectUrls: Set<string> = new Set();
+
+  constructor(id: "A" | "B") {
+    this.id = id;
+    // Deck B starts muted
+    this.masterGainValue = id === "B" ? 0 : 1;
   }
 
-  // Unload existing stems
-  unloadStems();
+  // ==========================================================================
+  // Lifecycle
+  // ==========================================================================
 
-  try {
-    console.log("🎵 Loading stems...");
+  async ensureAudio(): Promise<void> {
+    await ensureToneStarted();
 
-    // Verify each stem URL
-    const verifications = await Promise.all([
-      verifyAudio(stems.vocals),
-      verifyAudio(stems.drums),
-      verifyAudio(stems.bass),
-    ]);
+    // Create audio graph if not already created
+    if (!this.stemsMixGain) {
+      this.stemsMixGain = new Tone.Gain(1);
+      this.filter = new Tone.Filter({
+        type: "lowpass",
+        frequency: 8000,
+        rolloff: -24,
+      });
+      this.masterGain = new Tone.Gain(this.masterGainValue);
+      this.limiter = new Tone.Limiter(-1); // -1dB threshold
 
-    const [vocalsOk, drumsOk, bassOk] = verifications;
-    const loadedStems: string[] = [];
-    const missingStem: string[] = [];
+      // Connect chain: stemsMixGain → filter → masterGain → limiter → destination
+      this.stemsMixGain.connect(this.filter);
+      this.filter.connect(this.masterGain);
+      this.masterGain.connect(this.limiter);
+      this.limiter.toDestination();
 
-    if (!vocalsOk) missingStem.push("vocals");
-    else loadedStems.push("vocals");
+      console.log(`✅ Deck ${this.id}: Audio graph created (master gain: ${this.masterGainValue})`);
+    }
+  }
 
-    if (!drumsOk) missingStem.push("drums");
-    else loadedStems.push("drums");
-
-    if (!bassOk) missingStem.push("bass");
-    else loadedStems.push("bass");
-
-    // If all stems are missing, throw error
-    if (loadedStems.length === 0) {
-      throw new Error("❌ No stems loaded – check public/samples/");
+  dispose(): void {
+    // Stop playback
+    if (this.playing) {
+      this.pause();
     }
 
-    // Create players (will be silent if URL is bad)
-    _players = {
-      vocals: new Tone.Player({ url: stems.vocals, autostart: false, loop: true }),
-      drums: new Tone.Player({ url: stems.drums, autostart: false, loop: true }),
-      bass: new Tone.Player({ url: stems.bass, autostart: false, loop: true }),
-    };
+    // Dispose all players
+    this.players.forEach(player => player.dispose());
+    this.players.clear();
 
-    // Create per-stem gain nodes (for mute/unmute)
-    _gains = {
-      vocals: new Tone.Gain(vocalsOk ? 1 : 0),
-      drums: new Tone.Gain(drumsOk ? 1 : 0),
-      bass: new Tone.Gain(bassOk ? 1 : 0),
-    };
+    // Dispose all stem gains
+    this.stemGains.forEach(gain => gain.dispose());
+    this.stemGains.clear();
 
-    // Connect: Player → Gain → MixGain
-    _players.vocals.connect(_gains.vocals);
-    _players.drums.connect(_gains.drums);
-    _players.bass.connect(_gains.bass);
+    // Dispose graph nodes
+    this.stemsMixGain?.dispose();
+    this.filter?.dispose();
+    this.masterGain?.dispose();
+    this.limiter?.dispose();
 
-    _gains.vocals.connect(_mixGain!);
-    _gains.drums.connect(_mixGain!);
-    _gains.bass.connect(_mixGain!);
+    this.stemsMixGain = null;
+    this.filter = null;
+    this.masterGain = null;
+    this.limiter = null;
 
-    // Load only verified stems
-    const loadPromises: Promise<void>[] = [];
-    if (vocalsOk) loadPromises.push(_players.vocals.load(stems.vocals));
-    if (drumsOk) loadPromises.push(_players.drums.load(stems.drums));
-    if (bassOk) loadPromises.push(_players.bass.load(stems.bass));
+    // Revoke object URLs
+    this.objectUrls.forEach(url => URL.revokeObjectURL(url));
+    this.objectUrls.clear();
+
+    this.loaded = false;
+    this.stemStates.clear();
+
+    console.log(`🗑️ Deck ${this.id}: Disposed`);
+  }
+
+  // ==========================================================================
+  // Loading
+  // ==========================================================================
+
+  async loadStems(stems: Stems): Promise<void> {
+    await this.ensureAudio();
+    this.unload();
+
+    const stemNames: (keyof Stems)[] = ["vocals", "drums", "bass"];
+    const loadPromises: Promise<unknown>[] = [];
+    const loadedStems: string[] = [];
+    const failedStems: string[] = [];
+
+    for (const stemName of stemNames) {
+      const url = stems[stemName];
+      if (!url) continue;
+
+      // Verify URL
+      const isValid = await verifyAudioUrl(url);
+      if (!isValid) {
+        failedStems.push(stemName);
+        console.warn(`⚠️ Deck ${this.id}: ${stemName} URL invalid/unreachable: ${url}`);
+        continue;
+      }
+
+      // Create player and gain
+      const player = new Tone.Player({
+        url,
+        autostart: false,
+        loop: true,
+      });
+      const gain = new Tone.Gain(1); // Start enabled
+
+      // Connect: player → gain → stemsMixGain
+      player.connect(gain);
+      gain.connect(this.stemsMixGain!);
+
+      this.players.set(stemName, player);
+      this.stemGains.set(stemName, gain);
+      this.stemStates.set(stemName, true); // enabled by default
+
+      loadPromises.push(player.load(url));
+      loadedStems.push(stemName);
+    }
+
+    if (loadPromises.length === 0) {
+      throw new Error(`Deck ${this.id}: No valid stems to load`);
+    }
 
     await Promise.all(loadPromises);
 
-    // Reset playback state
-    _loaded = true;
-    _playing = false;
-    _lastStartOffsetSec = 0;
-    _lastStartWallTime = 0;
-    _playbackRate = 1.0;
-    _stemStates = { vocals: vocalsOk, drums: drumsOk, bass: bassOk };
+    // Apply current tempo to all players
+    this.players.forEach(player => {
+      if (player.buffer.loaded) {
+        player.playbackRate = this.tempoFactor;
+      }
+    });
 
-    // Apply current rates (including tempo factor and BPM matching)
-    applyRates();
+    this.loaded = true;
+    this.lastStartOffsetSec = 0;
+    this.playing = false;
 
-    // Log results
-    if (loadedStems.length > 0) {
-      console.log(`✅ Loaded ${loadedStems.join(" / ")}`);
+    console.log(`✅ Deck ${this.id}: Loaded stems [${loadedStems.join(", ")}]`);
+    if (failedStems.length > 0) {
+      console.warn(`⚠️ Deck ${this.id}: Failed stems [${failedStems.join(", ")}]`);
     }
-    if (missingStem.length > 0) {
-      missingStem.forEach(stem => {
-        console.warn(`⚠️ Missing or bad file: ${stems[stem as keyof Stems]} — muting ${stem}`);
-      });
+
+    // D6: Auto-sync tempo if enabled and this is Deck B
+    if (this.id === "B") {
+      const cfg = getConfig();
+      if (cfg.autoSyncTempo && engineA.isLoaded()) {
+        const tempoA = engineA.getTempoFactor();
+        this.setTempoFactor(tempoA);
+        console.log(`🔗 Auto-sync: Deck B tempo → ${tempoA.toFixed(2)}x (matched to Deck A)`);
+      }
     }
-  } catch (error) {
-    unloadStems();
-    throw new Error(`Failed to load stems: ${error instanceof Error ? error.message : error}`);
-  }
-}
-
-/**
- * Unload stems and clean up resources.
- */
-export function unloadStems(): void {
-  if (_players) {
-    _players.vocals.dispose();
-    _players.drums.dispose();
-    _players.bass.dispose();
-    _players = null;
   }
 
-  if (_gains) {
-    _gains.vocals.dispose();
-    _gains.drums.dispose();
-    _gains.bass.dispose();
-    _gains = null;
-  }
+  async loadFullMix(src: TrackSource): Promise<void> {
+    await this.ensureAudio();
+    this.unload();
 
-  _loaded = false;
-  _playing = false;
-  _lastStartOffsetSec = 0;
-  _lastStartWallTime = 0;
-
-  console.log("🔊 Stems unloaded");
-}
-
-/**
- * Check if stems are currently loaded.
- */
-export function isStemsLoaded(): boolean {
-  return _loaded;
-}
-
-/**
- * Toggle a specific stem on/off (mute/unmute).
- */
-export function toggleStem(stem: keyof Stems, enabled: boolean): void {
-  if (!_gains) {
-    console.warn("⚠️ Cannot toggle stem - stems not loaded");
-    return;
-  }
-
-  _stemStates[stem] = enabled;
-  // Use rampTo for click-free transitions
-  _gains[stem].gain.rampTo(enabled ? 1 : 0, 0.02); // 20ms ramp
-
-  console.log(`🎚️ Stem ${stem}: ${enabled ? "ON" : "OFF"}`);
-}
-
-/**
- * Get current stem mute states.
- */
-export function getStemStates(): { vocals: boolean; drums: boolean; bass: boolean } {
-  return { ..._stemStates };
-}
-
-// ============================================================================
-// Guest Vocals API
-// ============================================================================
-
-/**
- * Load a guest vocal track from URL or file.
- * Creates the player, connects to audio graph, and loads the audio.
- */
-export async function loadGuestVocals(src: { url?: string; file?: File | Blob }): Promise<void> {
-  if (!_audioInitialized || !_mixGain) {
-    throw new Error("Audio not initialized. Call initAudio() first.");
-  }
-
-  // Unload existing guest if present
-  unloadGuestVocals();
-
-  try {
     // Determine URL
     let url: string;
     if (src.file) {
       url = URL.createObjectURL(src.file);
-      _guestObjectUrl = url; // Track for cleanup
+      this.objectUrls.add(url);
     } else if (src.url) {
       url = src.url;
     } else {
-      throw new Error("Must provide either url or file for guest vocals");
+      throw new Error(`Deck ${this.id}: Must provide url or file`);
     }
 
-    console.log("🎤 Loading guest vocals...");
+    // Verify URL
+    const isValid = await verifyAudioUrl(url);
+    if (!isValid) {
+      throw new Error(`Deck ${this.id}: Full mix URL invalid/unreachable: ${url}`);
+    }
 
-    // Create player and gain
-    _guestPlayer = new Tone.Player({
+    // Create single player (no per-stem control)
+    const player = new Tone.Player({
       url,
       autostart: false,
-      loop: true
+      loop: true,
     });
-    _guestGain = new Tone.Gain(1); // Start at full volume, will be controlled by setGuestEnabled/setGuestLevel
 
-    // Connect: GuestPlayer → GuestGain → MixGain
-    _guestPlayer.connect(_guestGain);
-    _guestGain.connect(_mixGain);
+    // Connect directly to stemsMixGain (no per-stem gain needed)
+    player.connect(this.stemsMixGain!);
 
-    // Load the audio
-    await _guestPlayer.load(url);
+    await player.load(url);
+    player.playbackRate = this.tempoFactor;
 
-    _guestLoaded = true;
+    this.players.set("fullMix", player);
+    this.loaded = true;
+    this.lastStartOffsetSec = 0;
+    this.playing = false;
 
-    // Apply current rates (including BPM matching if configured)
-    applyRates();
-
-    console.log("✅ Guest vocals loaded");
-
-  } catch (error) {
-    unloadGuestVocals();
-    throw new Error(`Failed to load guest vocals: ${error instanceof Error ? error.message : error}`);
-  }
-}
-
-/**
- * Unload guest vocals and clean up resources.
- */
-export function unloadGuestVocals(): void {
-  if (_guestPlayer) {
-    _guestPlayer.dispose();
-    _guestPlayer = null;
+    console.log(`✅ Deck ${this.id}: Loaded full mix`);
   }
 
-  if (_guestGain) {
-    _guestGain.dispose();
-    _guestGain = null;
+  unload(): void {
+    // Stop if playing
+    if (this.playing) {
+      this.pause();
+    }
+
+    // Dispose players and gains
+    this.players.forEach(player => player.dispose());
+    this.players.clear();
+
+    this.stemGains.forEach(gain => gain.dispose());
+    this.stemGains.clear();
+
+    // Revoke object URLs
+    this.objectUrls.forEach(url => URL.revokeObjectURL(url));
+    this.objectUrls.clear();
+
+    this.loaded = false;
+    this.stemStates.clear();
+    this.lastStartOffsetSec = 0;
   }
 
-  // Revoke object URL if we created one
-  if (_guestObjectUrl) {
-    URL.revokeObjectURL(_guestObjectUrl);
-    _guestObjectUrl = null;
+  isLoaded(): boolean {
+    return this.loaded;
   }
 
-  _guestLoaded = false;
-  console.log("🔊 Guest vocals unloaded");
-}
+  // ==========================================================================
+  // Transport
+  // ==========================================================================
 
-/**
- * Check if guest vocals are loaded.
- */
-export function isGuestLoaded(): boolean {
-  return _guestLoaded;
-}
+  play(): void {
+    if (!this.loaded) {
+      console.warn(`⚠️ Deck ${this.id}: Cannot play - not loaded`);
+      return;
+    }
 
-/**
- * Enable or disable guest vocals (mute/unmute).
- * @param enabled - true to unmute, false to mute
- * @param rampMs - ramp time in seconds (default 0.03s = 30ms)
- */
-export function setGuestEnabled(enabled: boolean, rampMs = 0.03): void {
-  if (!_guestGain) {
-    console.warn("⚠️ Cannot set guest enabled - guest not loaded");
-    return;
-  }
+    if (this.playing) return; // Already playing
 
-  _guestGain.gain.rampTo(enabled ? 1 : 0, rampMs);
-  console.log(`🎤 Guest vocals: ${enabled ? "ON" : "OFF"}`);
-}
+    const now = Tone.now();
 
-/**
- * Set guest vocals level (volume).
- * @param value01 - level in range [0..1]
- * @param rampMs - ramp time in seconds (default 0.03s = 30ms)
- */
-export function setGuestLevel(value01: number, rampMs = 0.03): void {
-  if (!_guestGain) {
-    console.warn("⚠️ Cannot set guest level - guest not loaded");
-    return;
-  }
-
-  // Clamp to [0, 1]
-  const clamped = Math.max(0, Math.min(1, value01));
-  _guestGain.gain.rampTo(clamped, rampMs);
-  console.log(`🎤 Guest level: ${clamped.toFixed(2)}`);
-}
-
-// ============================================================================
-// BPM API
-// ============================================================================
-
-/**
- * Set the master track BPM for tempo matching.
- * @param bpm - BPM value (60-200), or null to clear
- */
-export function setMasterBpm(bpm: number | null): void {
-  if (bpm === null) {
-    _masterBpm = null;
-    console.log("🎵 Master BPM cleared");
-    return;
-  }
-
-  // Clamp to sensible range with warning
-  if (bpm < 60 || bpm > 200) {
-    console.warn(`⚠️ Master BPM ${bpm} outside typical range (60-200), clamping`);
-    bpm = Math.max(60, Math.min(200, bpm));
-  }
-
-  _masterBpm = bpm;
-  console.log(`🎵 Master BPM: ${bpm}`);
-
-  // Apply rates if players are loaded
-  applyRates();
-}
-
-/**
- * Set the guest vocals BPM for tempo matching.
- * @param bpm - BPM value (60-200), or null to clear
- */
-export function setGuestBpm(bpm: number | null): void {
-  if (bpm === null) {
-    _guestBpm = null;
-    _guestBpmWarningLogged = false; // Reset warning flag
-    console.log("🎤 Guest BPM cleared");
-    return;
-  }
-
-  // Clamp to sensible range with warning
-  if (bpm < 60 || bpm > 200) {
-    console.warn(`⚠️ Guest BPM ${bpm} outside typical range (60-200), clamping`);
-    bpm = Math.max(60, Math.min(200, bpm));
-  }
-
-  _guestBpm = bpm;
-  _guestBpmWarningLogged = false; // Reset warning flag
-  console.log(`🎤 Guest BPM: ${bpm}`);
-
-  // Apply rates if players are loaded
-  applyRates();
-}
-
-/**
- * Get current BPM settings.
- * @returns Object with master and guest BPM values (or null if not set)
- */
-export function getBpms(): { master: number | null; guest: number | null } {
-  return {
-    master: _masterBpm,
-    guest: _guestBpm,
-  };
-}
-
-/**
- * Legacy loadTrack support (for backward compatibility).
- * Loads the same audio as all three stems.
- */
-export async function loadTrack(src: { url?: string; file?: File | Blob }): Promise<void> {
-  console.warn("⚠️ loadTrack() is deprecated - consider using loadStems() instead");
-
-  // Determine URL
-  let url: string;
-  if (src.file) {
-    url = URL.createObjectURL(src.file);
-  } else if (src.url) {
-    url = src.url;
-  } else {
-    throw new Error("Must provide either url or file");
-  }
-
-  // Load as all three stems (mono playback)
-  await loadStems({
-    vocals: url,
-    drums: url,
-    bass: url,
-  });
-}
-
-// ============================================================================
-// Event Handlers
-// ============================================================================
-
-/**
- * Handle events from the bus.
- */
-function handleEvent(evt: DJEvent): void {
-  switch (evt.type) {
-    case "PLAY":
-      handlePlay();
-      break;
-    case "PAUSE":
-      handlePause();
-      break;
-    case "TEMPO_SET":
-      handleTempoSet(evt.value);
-      break;
-    case "FILTER_SWEEP":
-      handleFilterSweep(evt.value);
-      break;
-    case "STEM_TOGGLE":
-      // Handle both main stems and guest vocals
-      if (evt.stem === "guestVocals") {
-        setGuestEnabled(evt.enabled);
-      } else {
-        toggleStem(evt.stem, evt.enabled);
+    // Start all loaded players at current offset
+    this.players.forEach(player => {
+      if (player.buffer.loaded) {
+        player.start(now, this.lastStartOffsetSec);
       }
-      break;
-    case "STEM_LEVEL":
-      // Handle level control (primarily for guest vocals)
-      if (evt.stem === "guestVocals") {
-        setGuestLevel(evt.value);
+    });
+
+    this.playing = true;
+    this.lastStartWallTime = performance.now();
+
+    console.log(`▶️ Deck ${this.id}: Playing from ${this.lastStartOffsetSec.toFixed(2)}s`);
+  }
+
+  pause(): void {
+    if (!this.loaded) return;
+    if (!this.playing) return; // Already paused
+
+    const now = Tone.now();
+
+    // Stop all players
+    this.players.forEach(player => {
+      if (player.buffer.loaded) {
+        player.stop(now);
       }
-      break;
-    case "GUEST_VOCALS_LOAD":
-      loadGuestVocals(evt).catch(err => {
-        console.error("❌ Failed to load guest vocals:", err);
+    });
+
+    // Update offset based on elapsed time
+    const elapsedWall = (performance.now() - this.lastStartWallTime) / 1000;
+    this.lastStartOffsetSec += elapsedWall * this.tempoFactor;
+
+    // Wrap around if we have a duration
+    const firstPlayer = this.players.values().next().value as Tone.Player | undefined;
+    if (firstPlayer?.buffer.loaded) {
+      const duration = firstPlayer.buffer.duration;
+      this.lastStartOffsetSec = this.lastStartOffsetSec % duration;
+    }
+
+    this.playing = false;
+
+    console.log(`⏸️ Deck ${this.id}: Paused at ${this.lastStartOffsetSec.toFixed(2)}s`);
+  }
+
+  isPlaying(): boolean {
+    return this.playing;
+  }
+
+  // ==========================================================================
+  // D3: Precise Timing Methods
+  // ==========================================================================
+
+  /**
+   * Returns the current playback offset in seconds.
+   * Computed from lastStartOffsetSec + elapsed * tempoFactor when playing,
+   * or just lastStartOffsetSec when paused.
+   */
+  getOffsetSeconds(): number {
+    if (!this.loaded) return 0;
+
+    if (this.playing) {
+      // Compute elapsed time since last start
+      const elapsedWall = (performance.now() - this.lastStartWallTime) / 1000;
+      const offset = this.lastStartOffsetSec + elapsedWall * this.tempoFactor;
+
+      // Clamp to duration if available
+      const firstPlayer = this.players.values().next().value as Tone.Player | undefined;
+      if (firstPlayer?.buffer.loaded) {
+        const duration = firstPlayer.buffer.duration;
+        return offset % duration;
+      }
+
+      return offset;
+    }
+
+    // Paused: return stored offset
+    return this.lastStartOffsetSec;
+  }
+
+  /**
+   * Start this deck at a specific Tone.now() time.
+   * Uses the current offset without recomputing it.
+   * Caller controls the schedule.
+   */
+  playAt(when: number): void {
+    if (!this.loaded) {
+      console.warn(`⚠️ Deck ${this.id}: Cannot playAt - not loaded`);
+      return;
+    }
+
+    if (this.playing) {
+      // Stop first if already playing
+      const now = Tone.now();
+      this.players.forEach(player => {
+        if (player.buffer.loaded) {
+          player.stop(now);
+        }
       });
-      break;
+    }
+
+    // Clamp offset to valid range
+    const firstPlayer = this.players.values().next().value as Tone.Player | undefined;
+    if (firstPlayer?.buffer.loaded) {
+      const duration = firstPlayer.buffer.duration;
+      this.lastStartOffsetSec = this.lastStartOffsetSec % duration;
+    }
+
+    // Start all players at the scheduled time
+    this.players.forEach(player => {
+      if (player.buffer.loaded) {
+        player.start(when, this.lastStartOffsetSec);
+      }
+    });
+
+    this.playing = true;
+    // Record wall time at the scheduled start (adjust for lookahead)
+    this.lastStartWallTime = performance.now() + (when - Tone.now()) * 1000;
+
+    console.log(`▶️ Deck ${this.id}: Scheduled start at ${when.toFixed(3)}s (offset: ${this.lastStartOffsetSec.toFixed(2)}s)`);
+  }
+
+  /**
+   * Pause immediately and update offset using elapsed time.
+   */
+  pauseNow(): void {
+    if (!this.loaded) return;
+    if (!this.playing) return; // Already paused
+
+    const now = Tone.now();
+
+    // Stop all players immediately
+    this.players.forEach(player => {
+      if (player.buffer.loaded) {
+        player.stop(now);
+      }
+    });
+
+    // Update offset based on elapsed time
+    const elapsedWall = (performance.now() - this.lastStartWallTime) / 1000;
+    this.lastStartOffsetSec += elapsedWall * this.tempoFactor;
+
+    // Wrap around if we have a duration
+    const firstPlayer = this.players.values().next().value as Tone.Player | undefined;
+    if (firstPlayer?.buffer.loaded) {
+      const duration = firstPlayer.buffer.duration;
+      this.lastStartOffsetSec = this.lastStartOffsetSec % duration;
+    }
+
+    this.playing = false;
+
+    console.log(`⏸️ Deck ${this.id}: Paused at ${this.lastStartOffsetSec.toFixed(2)}s`);
+  }
+
+  // ==========================================================================
+  // Tempo & Filter
+  // ==========================================================================
+
+  setTempoFactor(value: number): void {
+    const cfg = getConfig();
+    const clamped = Math.max(cfg.tempoMin, Math.min(cfg.tempoMax, value));
+
+    this.tempoFactor = clamped;
+
+    // Apply to all loaded players
+    this.players.forEach(player => {
+      if (player.buffer.loaded) {
+        player.playbackRate = clamped;
+      }
+    });
+
+    console.log(`⏩ Deck ${this.id}: Tempo ${clamped.toFixed(2)}x`);
+  }
+
+  getTempoFactor(): number {
+    return this.tempoFactor;
+  }
+
+  setFilter(value01: number): void {
+    if (!this.filter) return;
+
+    const v = Math.max(0, Math.min(1, value01));
+    this.filterValue = v;
+
+    if (v < 0.5) {
+      // Lowpass: 0.0 → 400Hz, 0.5 → 8000Hz
+      this.filter.type = "lowpass";
+      const t = v / 0.5;
+      const cutoff = 400 + (8000 - 400) * t;
+      this.filter.frequency.rampTo(cutoff, 0.05);
+    } else {
+      // Highpass: 0.5 → 150Hz, 1.0 → 3000Hz
+      this.filter.type = "highpass";
+      const t = (v - 0.5) / 0.5;
+      const cutoff = 150 + (3000 - 150) * t;
+      this.filter.frequency.rampTo(cutoff, 0.05);
+    }
+  }
+
+  // ==========================================================================
+  // Gains
+  // ==========================================================================
+
+  setMasterGain(value01: number, rampMs = 0.03): void {
+    if (!this.masterGain) return;
+
+    const clamped = Math.max(0, Math.min(1, value01));
+    this.masterGainValue = clamped;
+    this.masterGain.gain.rampTo(clamped, rampMs);
+
+    console.log(`🔊 Deck ${this.id}: Master gain ${clamped.toFixed(2)}`);
+  }
+
+  setStemEnabled(stem: keyof Stems, enabled: boolean, rampMs = 0.02): void {
+    const gain = this.stemGains.get(stem);
+    if (!gain) {
+      console.warn(`⚠️ Deck ${this.id}: Stem ${stem} not loaded`);
+      return;
+    }
+
+    this.stemStates.set(stem, enabled);
+    gain.gain.rampTo(enabled ? 1 : 0, rampMs);
+
+    console.log(`🎚️ Deck ${this.id}: ${stem} ${enabled ? "ON" : "OFF"}`);
+  }
+
+  setStemLevel(stem: keyof Stems, value01: number, rampMs = 0.02): void {
+    const gain = this.stemGains.get(stem);
+    if (!gain) {
+      console.warn(`⚠️ Deck ${this.id}: Stem ${stem} not loaded`);
+      return;
+    }
+
+    const clamped = Math.max(0, Math.min(1, value01));
+    gain.gain.rampTo(clamped, rampMs);
+
+    console.log(`🎚️ Deck ${this.id}: ${stem} level ${clamped.toFixed(2)}`);
+  }
+
+  // ==========================================================================
+  // State Query
+  // ==========================================================================
+
+  getState() {
+    const stemStates: { vocals?: boolean; drums?: boolean; bass?: boolean } = {};
+
+    if (this.stemStates.has("vocals")) stemStates.vocals = this.stemStates.get("vocals");
+    if (this.stemStates.has("drums")) stemStates.drums = this.stemStates.get("drums");
+    if (this.stemStates.has("bass")) stemStates.bass = this.stemStates.get("bass");
+
+    return {
+      id: this.id,
+      loaded: this.loaded,
+      playing: this.playing,
+      tempoFactor: this.tempoFactor,
+      filter: this.filterValue,
+      masterGain: this.masterGainValue,
+      stems: stemStates,
+    };
   }
 }
 
+// ============================================================================
+// Deck Instances
+// ============================================================================
+
+export const engineA = new DeckAudioEngine("A");
+export const engineB = new DeckAudioEngine("B");
+
+export function getDeck(id: "A" | "B"): DeckAudioEngine {
+  return id === "A" ? engineA : engineB;
+}
+
+// ============================================================================
+// D3: Orchestrator Functions (Synchronized Control)
+// ============================================================================
+
 /**
- * PLAY: Start or resume playback for all stems in sync.
+ * Start both decks at the same audio quantum for sample-accurate synchronization.
+ * Uses Tone.now() + 50ms lookahead to ensure both decks start together.
  */
-function handlePlay(): void {
-  if (!_loaded || !_players) {
-    console.warn("⚠️ Cannot play - stems not loaded");
+export function playBothSync(): void {
+  const when = Tone.now() + 0.05; // 50ms lookahead
+
+  if (engineA.isLoaded()) {
+    engineA.playAt(when);
+  } else {
+    console.warn("⚠️ playBothSync: Deck A not loaded");
+  }
+
+  if (engineB.isLoaded()) {
+    engineB.playAt(when);
+  } else {
+    console.warn("⚠️ playBothSync: Deck B not loaded");
+  }
+
+  console.log(`🎵 Both decks scheduled to start at ${when.toFixed(3)}s`);
+}
+
+/**
+ * Start a single deck with lookahead for click-free playback.
+ * Uses 30ms lookahead by default.
+ */
+export function playDeckSync(id: "A" | "B"): void {
+  const deck = getDeck(id);
+
+  if (!deck.isLoaded()) {
+    console.warn(`⚠️ playDeckSync: Deck ${id} not loaded`);
     return;
   }
 
-  if (_playing) return; // Already playing
-
-  // Start all stems at the same offset for perfect sync
-  // Only start players that successfully loaded (have buffers)
-  const now = Tone.now();
-  if (_players.vocals.buffer.loaded) _players.vocals.start(now, _lastStartOffsetSec);
-  if (_players.drums.buffer.loaded) _players.drums.start(now, _lastStartOffsetSec);
-  if (_players.bass.buffer.loaded) _players.bass.start(now, _lastStartOffsetSec);
-
-  // Start guest vocals if loaded
-  if (_guestPlayer && _guestPlayer.buffer.loaded) {
-    _guestPlayer.start(now, _lastStartOffsetSec);
-  }
-
-  _playing = true;
-  _lastStartWallTime = performance.now();
-
-  console.log(`▶️ Playing from ${_lastStartOffsetSec.toFixed(2)}s`);
+  const when = Tone.now() + 0.03; // 30ms lookahead
+  deck.playAt(when);
 }
 
 /**
- * PAUSE: Pause playback for all stems, remember position.
+ * Pause a single deck immediately.
  */
-function handlePause(): void {
-  if (!_loaded || !_players) return;
-  if (!_playing) return; // Already paused
+export function pauseDeck(id: "A" | "B"): void {
+  const deck = getDeck(id);
 
-  // Stop all stems (only stop loaded players)
-  const now = Tone.now();
-  if (_players.vocals.buffer.loaded) _players.vocals.stop(now);
-  if (_players.drums.buffer.loaded) _players.drums.stop(now);
-  if (_players.bass.buffer.loaded) _players.bass.stop(now);
-
-  // Stop guest vocals if loaded
-  if (_guestPlayer && _guestPlayer.buffer.loaded) {
-    _guestPlayer.stop(now);
+  if (!deck.isLoaded()) {
+    console.warn(`⚠️ pauseDeck: Deck ${id} not loaded`);
+    return;
   }
 
-  // Calculate new offset based on elapsed time and playback rate
-  const elapsedWall = (performance.now() - _lastStartWallTime) / 1000; // seconds
-  _lastStartOffsetSec += elapsedWall * _playbackRate;
+  deck.pauseNow();
+}
 
-  // Wrap around if looping (use first loaded player's duration)
-  if (_players.vocals.buffer.loaded) {
-    const duration = _players.vocals.buffer.duration;
-    _lastStartOffsetSec = _lastStartOffsetSec % duration;
-  } else if (_players.drums.buffer.loaded) {
-    const duration = _players.drums.buffer.duration;
-    _lastStartOffsetSec = _lastStartOffsetSec % duration;
-  } else if (_players.bass.buffer.loaded) {
-    const duration = _players.bass.buffer.duration;
-    _lastStartOffsetSec = _lastStartOffsetSec % duration;
+// ============================================================================
+// D6: Tempo Sync Functions
+// ============================================================================
+
+/**
+ * Sync Deck B's tempo to match Deck A's current tempo.
+ * Uses smooth ramping if configured.
+ */
+export function syncTempoB(): void {
+  if (!engineA.isLoaded()) {
+    console.warn("⚠️ syncTempoB: Deck A not loaded");
+    return;
   }
 
-  _playing = false;
+  if (!engineB.isLoaded()) {
+    console.warn("⚠️ syncTempoB: Deck B not loaded");
+    return;
+  }
 
-  console.log(`⏸️ Paused at ${_lastStartOffsetSec.toFixed(2)}s`);
+  const tempoA = engineA.getTempoFactor();
+  engineB.setTempoFactor(tempoA);
+
+  console.log(`🔗 Tempo sync: Deck B → ${tempoA.toFixed(2)}x (matched to Deck A)`);
 }
 
 /**
- * TEMPO_SET: Adjust playback rate for all stems.
- * Updates tempo factor and applies BPM-adjusted rates to all players.
+ * Sync Deck A's tempo to match Deck B's current tempo.
+ * Uses smooth ramping if configured.
  */
-function handleTempoSet(value: number): void {
-  // Clamp to reasonable range
-  const clamped = Math.max(0.5, Math.min(2.0, value));
+export function syncTempoA(): void {
+  if (!engineA.isLoaded()) {
+    console.warn("⚠️ syncTempoA: Deck A not loaded");
+    return;
+  }
 
-  // Update tempo factor
-  _tempoFactor = clamped;
+  if (!engineB.isLoaded()) {
+    console.warn("⚠️ syncTempoA: Deck B not loaded");
+    return;
+  }
 
-  // Apply rates to all players (main stems use masterRate(), guest uses guestRate())
-  applyRates();
+  const tempoB = engineB.getTempoFactor();
+  engineA.setTempoFactor(tempoB);
 
-  console.log(`⏩ Tempo: ${clamped.toFixed(2)}x`);
+  console.log(`🔗 Tempo sync: Deck A → ${tempoB.toFixed(2)}x (matched to Deck B)`);
 }
 
 /**
- * FILTER_SWEEP: Macro control for lowpass ↔ highpass.
+ * Auto-sync Deck B to Deck A if autoSyncTempo is enabled.
+ * Called automatically when Deck B loads or plays.
  */
-function handleFilterSweep(value: number): void {
-  if (!_filter) return;
+export function autoSyncTempoIfEnabled(): void {
+  const cfg = getConfig();
 
-  // Clamp to [0, 1]
-  const v = Math.max(0, Math.min(1, value));
+  if (!cfg.autoSyncTempo) return;
 
-  if (v < 0.5) {
-    // Lowpass: 0.0 → 400Hz, 0.5 → 8000Hz
-    _filter.type = "lowpass";
-    const t = v / 0.5;
-    const cutoff = 400 + (8000 - 400) * t;
-    _filter.frequency.rampTo(cutoff, 0.05);
-  } else {
-    // Highpass: 0.5 → 150Hz, 1.0 → 3000Hz
-    _filter.type = "highpass";
-    const t = (v - 0.5) / 0.5;
-    const cutoff = 150 + (3000 - 150) * t;
-    _filter.frequency.rampTo(cutoff, 0.05);
+  if (engineA.isLoaded() && engineB.isLoaded()) {
+    syncTempoB();
   }
+}
+
+// Expose for console testing
+if (import.meta.env.DEV) {
+  (globalThis as any).__decks = { A: engineA, B: engineB };
+  (globalThis as any).__deckControl = {
+    playBothSync,
+    playDeckSync,
+    pauseDeck,
+    syncTempoB,
+    syncTempoA,
+    autoSyncTempoIfEnabled,
+  };
+  console.log("🔧 Deck engines available: window.__decks.A / window.__decks.B");
+  console.log("🔧 Deck controls available: window.__deckControl");
 }

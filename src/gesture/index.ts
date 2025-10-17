@@ -1,15 +1,16 @@
 /**
  * Main entry point for the gesture recognition module.
  * Provides a tiny API to start/stop everything cleanly.
+ * D4: Event router automatically started at module load.
  */
 
 import * as cam from "./camera";
 import * as mp from "./mediapipe";
 import { GestureModes } from "./modes";
-import { subscribe, emit } from "./bus";
 import * as diag from "./diagnostics";
 import * as stemService from "./stemService";
 import { setConfig, getConfig } from "./config";
+import { startEventRouter, stopEventRouter } from "./router";
 
 export type StartOptions = {
   modelUrl?: string; // default: "/models/hand_landmarker.task"
@@ -17,8 +18,27 @@ export type StartOptions = {
 };
 
 let _started = false;
+// @ts-expect-error - Detector reference kept for future features
 let _detector: GestureModes | null = null;
 let _stopLoop: (() => void) | null = null;
+
+// ============================================================================
+// D4: Start Event Router (automatically at module load)
+// ============================================================================
+
+// Start router once at module load (idempotent, safe for HMR)
+// @ts-expect-error - Router stop handle kept but router runs persistently
+const _stopRouter = startEventRouter();
+
+// Expose for debugging
+if (import.meta.env.DEV) {
+  (globalThis as any).__stopEventRouter = stopEventRouter;
+  console.log("🔧 Event router control: window.__stopEventRouter()");
+}
+
+// ============================================================================
+// Gesture Module Lifecycle
+// ============================================================================
 
 export async function startGestureModule(opts: StartOptions = {}) {
   if (_started) return; // idempotent
@@ -45,13 +65,15 @@ export async function startGestureModule(opts: StartOptions = {}) {
     const video = cam.getVideoElement();
     const hands = mp.detectHands(video);
 
-    if (hands.length) {
-      // NOTE: your implementation changed update() to accept HandDetection.
-      // So we pass the first hand detection directly here:
-      det.update(hands[0]);
-      diag.setMode(det.getMode());
+    // D5: Process ALL hands, not just hands[0]
+    det.update(hands);
+
+    // D5: Update diagnostics with dual-hand mode info
+    const handModes = det.getAllModes();
+    if (handModes.length > 0) {
+      diag.setHandModes(handModes);
     } else {
-      diag.setMode("idle");
+      diag.setMode("idle"); // Backward compatibility for no hands
     }
 
     requestAnimationFrame(loop);
@@ -91,6 +113,10 @@ export async function stopGestureModule() {
     // If your mediapipe wrapper exposes a cleanup, call it here (optional).
     await mp.closeModel();
   } catch {}
+
+  // Note: Event router keeps running even after gesture module stops
+  // This allows manual event emission via bus without gesture detection
+  // To stop router manually: window.__stopEventRouter()
 }
 
 export function isGestureModuleRunning() {
@@ -99,10 +125,21 @@ export function isGestureModuleRunning() {
 
 // Re-exports for integrators
 export { subscribe, emit } from "./bus";
-export type { DJEvent } from "./types";
+export type { DJEvent, DeckID } from "./types";
+
+// D2: Export dual-deck audio engines
+// D3: Export orchestrator functions for synchronized control
+// D6: Export tempo sync functions
 export {
-  initAudio, loadStems, unloadStems, isStemsLoaded, toggleStem, getStemStates,
-  loadGuestVocals, unloadGuestVocals, isGuestLoaded, setGuestEnabled, setGuestLevel,
-  setMasterBpm, setGuestBpm, getBpms
+  engineA,
+  engineB,
+  getDeck,
+  DeckAudioEngine,
+  playBothSync,
+  playDeckSync,
+  pauseDeck,
+  syncTempoA,
+  syncTempoB,
+  autoSyncTempoIfEnabled,
 } from "./audioEngine";
-export type { Stems } from "./audioEngine";
+export type { Stems, TrackSource } from "./audioEngine";

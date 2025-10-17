@@ -3,10 +3,8 @@
  * Converts hand landmarks into boolean states and gesture detection.
  */
 
-import type { HandDetection, HandLandmark } from "./mediapipe";
+import type { HandDetection } from "./mediapipe";
 import {
-  computeHandBox,
-  computeHandScale,
   normalizeLandmarks,
   type NormLandmark,
   dist2D,
@@ -55,9 +53,7 @@ export const defaultPostureConfig: PostureConfig = {
 // MediaPipe Hand Landmark Indices
 // ============================================================================
 
-const WRIST = 0;
 const THUMB_TIP = 4;
-const INDEX_MCP = 5;
 const INDEX_PIP = 6;
 const INDEX_TIP = 8;
 const MIDDLE_PIP = 10;
@@ -81,7 +77,7 @@ const PINKY_TIP = 20;
  */
 export function fingerStates(
   norm: NormLandmark[],
-  handedness: "Left" | "Right",
+  _handedness: "Left" | "Right",
   cfg?: PostureConfig
 ): FingerStates {
   const globalCfg = getConfig();
@@ -196,7 +192,7 @@ export class PostureDetector {
    */
   update(det: HandDetection): Posture {
     // Normalize landmarks
-    const { norm, box, scale } = normalizeLandmarks(det.landmarks);
+    const { norm, scale } = normalizeLandmarks(det.landmarks);
 
     // Calculate pinch gap (in normalized space)
     const gap = pinchGapNorm(norm);
