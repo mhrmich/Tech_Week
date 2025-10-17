@@ -4,6 +4,10 @@ let audioContext: AudioContext | null = null
 let audioEngine: AudioEngine | null = null
 
 export function getAudioContext(): AudioContext {
+  if (typeof window === 'undefined') {
+    throw new Error('AudioContext is only available in the browser')
+  }
+  
   if (!audioContext) {
     audioContext = new AudioContext()
   }

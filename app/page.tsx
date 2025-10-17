@@ -16,8 +16,14 @@ export default function DJVisionApp() {
   const [focusedDeck, setFocusedDeck] = useState<DeckId>("A")
   const [crossfader, setCrossfader] = useState(0.5)
   const [masterVolume, setMasterVolume] = useState(0.8)
+  const [audioEngine, setAudioEngine] = useState<any>(null)
 
-  const audioEngine = getAudioEngine()
+  useEffect(() => {
+    // Only initialize audio engine on the client side
+    if (typeof window !== 'undefined') {
+      setAudioEngine(getAudioEngine())
+    }
+  }, [])
 
   const deckARef = useRef<{
     handlePlayPause: () => void
@@ -42,11 +48,15 @@ export default function DJVisionApp() {
   } | null>(null)
 
   useEffect(() => {
-    audioEngine.setCrossfader(crossfader)
+    if (audioEngine) {
+      audioEngine.setCrossfader(crossfader)
+    }
   }, [crossfader, audioEngine])
 
   useEffect(() => {
-    audioEngine.setMasterVolume(masterVolume)
+    if (audioEngine) {
+      audioEngine.setMasterVolume(masterVolume)
+    }
   }, [masterVolume, audioEngine])
 
   const handleTrackSelect = (track: AudioTrack) => {
@@ -157,6 +167,18 @@ export default function DJVisionApp() {
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
   }, [focusedDeck])
+
+  // Show loading state until audio engine is initialized
+  if (!audioEngine) {
+    return (
+      <div className="flex h-screen bg-background items-center justify-center">
+        <div className="text-center">
+          <div className="text-2xl font-bold text-foreground mb-2">DJ Vision</div>
+          <div className="text-muted-foreground">Initializing audio engine...</div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="flex h-screen bg-background">
@@ -272,10 +294,18 @@ const DeckWithControls = React.forwardRef<
   }
 >(({ deckId, track, isFocused, onFocus }, ref) => {
   const [volume, setVolume] = useState(0.8)
+  const [audioEngine, setAudioEngine] = useState<any>(null)
+  const [player, setPlayer] = useState<any>(null)
   const playerRef = useRef<any>(null)
 
-  const audioEngine = getAudioEngine()
-  const player = audioEngine.getDeck(deckId)
+  useEffect(() => {
+    // Only initialize audio engine on the client side
+    if (typeof window !== 'undefined') {
+      const engine = getAudioEngine()
+      setAudioEngine(engine)
+      setPlayer(engine.getDeck(deckId))
+    }
+  }, [deckId])
 
   React.useImperativeHandle(ref, () => ({
     handlePlayPause: () => {
@@ -319,6 +349,17 @@ const DeckWithControls = React.forwardRef<
       }
     },
   }))
+
+  // Show loading state until audio engine is initialized
+  if (!audioEngine || !player) {
+    return (
+      <div className="flex items-center justify-center h-64 bg-card rounded-lg border border-border">
+        <div className="text-center">
+          <div className="text-sm text-muted-foreground">Loading Deck {deckId}...</div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <Deck
