@@ -6,6 +6,7 @@
 import type { DJEvent } from "./types";
 import type { GestureMode } from "./modes";
 import { subscribe } from "./bus";
+import { getBpms } from "./audioEngine";
 
 export type DiagnosticsSnapshot = {
   enabled: boolean;
@@ -151,17 +152,27 @@ function printDiagnostics(ts: number): void {
 
   // Format event counts
   const eventParts: string[] = [];
-  const eventTypes = ["PLAY", "PAUSE", "TEMPO_SET", "FILTER_SWEEP", "STEM_TOGGLE", "CROSSFADER_SET"];
+  const eventTypes = [
+    "PLAY", "PAUSE", "TEMPO_SET", "FILTER_SWEEP",
+    "STEM_TOGGLE", "STEM_LEVEL", "GUEST_VOCALS_LOAD", "CROSSFADER_SET"
+  ];
 
   for (const type of eventTypes) {
     const count = _eventCounts[type] || 0;
-    eventParts.push(`${count} ${type.toLowerCase()}`);
+    if (count > 0) { // Only show events that have fired
+      eventParts.push(`${count} ${type.toLowerCase()}`);
+    }
   }
 
   const eventSummary = eventParts.join(" / ");
 
+  // Get BPM settings
+  const bpms = getBpms();
+  const masterBpmStr = bpms.master !== null ? bpms.master.toString() : "—";
+  const guestBpmStr = bpms.guest !== null ? bpms.guest.toString() : "—";
+
   console.log(
-    `diag | fps: ${fps.toFixed(1)} | dropped: ${_droppedFrames} | mode: ${_mode} | events: ${eventSummary}`
+    `diag | fps: ${fps.toFixed(1)} | dropped: ${_droppedFrames} | mode: ${_mode} | bpm M:${masterBpmStr} G:${guestBpmStr} | events: ${eventSummary}`
   );
 }
 

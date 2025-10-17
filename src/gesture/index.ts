@@ -100,5 +100,9 @@ export function isGestureModuleRunning() {
 // Re-exports for integrators
 export { subscribe, emit } from "./bus";
 export type { DJEvent } from "./types";
-export { initAudio, loadStems, unloadStems, isStemsLoaded, toggleStem, getStemStates } from "./audioEngine";
+export {
+  initAudio, loadStems, unloadStems, isStemsLoaded, toggleStem, getStemStates,
+  loadGuestVocals, unloadGuestVocals, isGuestLoaded, setGuestEnabled, setGuestLevel,
+  setMasterBpm, setGuestBpm, getBpms
+} from "./audioEngine";
 export type { Stems } from "./audioEngine";
