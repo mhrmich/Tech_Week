@@ -41,7 +41,6 @@ class HandState {
   lastStemToggle = 0;
   stemHoldStartTime: number | null = null;
   stemHoldFingerCount: number | null = null;
-  stemToggleFired: boolean = false;
 
   // Blend tracking (3-finger mode for right hand → Deck B)
   blendActive: boolean = false;
@@ -83,7 +82,6 @@ class HandState {
       this.lastTransportState = null;
       this.stemHoldStartTime = null;
       this.stemHoldFingerCount = null;
-      this.stemToggleFired = false;
       this.blendActive = false;
       this.blendHoldStartTime = null;
       return;
@@ -97,7 +95,6 @@ class HandState {
       this.pinchStartTime = null;
       this.stemHoldStartTime = null;
       this.stemHoldFingerCount = null;
-      this.stemToggleFired = false;
       this.blendActive = false;
       this.blendHoldStartTime = null;
       return;
@@ -114,7 +111,6 @@ class HandState {
       this.lastTransportState = null;
       this.stemHoldStartTime = null;
       this.stemHoldFingerCount = null;
-      this.stemToggleFired = false;
       return;
     }
 
@@ -137,7 +133,6 @@ class HandState {
     this.lastTransportState = null;
     this.stemHoldStartTime = null;
     this.stemHoldFingerCount = null;
-    this.stemToggleFired = false;
     this.blendActive = false;
     this.blendHoldStartTime = null;
   }
@@ -316,7 +311,7 @@ class HandState {
    * 1 finger → vocals
    * 2 fingers → instrumental (drums + bass together)
    * Requires holding for stemToggleHoldMs before toggling.
-   * Only toggles ONCE per continuous hold.
+   * Uses cooldown to allow repeated toggles without releasing.
    */
   private handleStems(fingerCount: number, now: number): void {
     const cfg = getConfig();
@@ -324,16 +319,16 @@ class HandState {
     // Only handle 1 or 2 fingers
     if (fingerCount < 1 || fingerCount > 2) return;
 
+    // Check cooldown to prevent rapid toggling
+    const cooldownMs = 800; // 800ms cooldown between toggles
+    if (now - this.lastStemToggle < cooldownMs) {
+      return;
+    }
+
     // If finger count changed, reset hold tracking
     if (fingerCount !== this.stemHoldFingerCount) {
       this.stemHoldStartTime = now;
       this.stemHoldFingerCount = fingerCount;
-      this.stemToggleFired = false;
-      return;
-    }
-
-    // If toggle already fired, wait for release
-    if (this.stemToggleFired) {
       return;
     }
 
@@ -347,7 +342,7 @@ class HandState {
       return;
     }
 
-    // Hold threshold met - emit toggle ONCE with deck tag
+    // Hold threshold met - emit toggle with deck tag
     if (fingerCount === 1) {
       // Toggle vocals
       this.stemStates.vocals = !this.stemStates.vocals;
@@ -357,6 +352,7 @@ class HandState {
         enabled: this.stemStates.vocals,
         deck: this.deck,
       });
+      console.log(`🎤 [${this.deck}] Vocals: ${this.stemStates.vocals ? "ON" : "OFF"}`);
     } else if (fingerCount === 2) {
       // Toggle instrumental (drums + bass together)
       const newState = !this.stemStates.drums;
@@ -365,11 +361,13 @@ class HandState {
 
       emit({ type: "STEM_TOGGLE", stem: "drums", enabled: newState, deck: this.deck });
       emit({ type: "STEM_TOGGLE", stem: "bass", enabled: newState, deck: this.deck });
+      console.log(`🎸 [${this.deck}] Instrumental: ${newState ? "ON" : "OFF"}`);
     }
 
-    this.stemToggleFired = true;
     this.lastStemFingerCount = fingerCount;
     this.lastStemToggle = now;
+    // Reset hold timer to require hold again for next toggle
+    this.stemHoldStartTime = now;
   }
 }
 
