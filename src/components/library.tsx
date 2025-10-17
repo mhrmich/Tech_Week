@@ -179,9 +179,9 @@ export function Library({ onDeckATrackLoad, onDeckBTrackLoad }: LibraryProps) {
             >
               <Upload className="w-4 h-4 mr-2" />
               {vocalFileA ? (
-                <span className="truncate">✅ {vocalFileA.name}</span>
+                <span className="truncate">{vocalFileA.name}</span>
               ) : (
-                "🎤 Upload Vocal"
+                "Upload Vocal"
               )}
             </Button>
 
@@ -201,9 +201,9 @@ export function Library({ onDeckATrackLoad, onDeckBTrackLoad }: LibraryProps) {
             >
               <Upload className="w-4 h-4 mr-2" />
               {backingFileA ? (
-                <span className="truncate">✅ {backingFileA.name}</span>
+                <span className="truncate">{backingFileA.name}</span>
               ) : (
-                "🎸 Upload Backing"
+                "Upload Backing"
               )}
             </Button>
 
@@ -244,9 +244,9 @@ export function Library({ onDeckATrackLoad, onDeckBTrackLoad }: LibraryProps) {
             >
               <Upload className="w-4 h-4 mr-2" />
               {vocalFileB ? (
-                <span className="truncate">✅ {vocalFileB.name}</span>
+                <span className="truncate">{vocalFileB.name}</span>
               ) : (
-                "🎤 Upload Vocal"
+                "Upload Vocal"
               )}
             </Button>
 
@@ -266,9 +266,9 @@ export function Library({ onDeckATrackLoad, onDeckBTrackLoad }: LibraryProps) {
             >
               <Upload className="w-4 h-4 mr-2" />
               {backingFileB ? (
-                <span className="truncate">✅ {backingFileB.name}</span>
+                <span className="truncate">{backingFileB.name}</span>
               ) : (
-                "🎸 Upload Backing"
+                "Upload Backing"
               )}
             </Button>
 
@@ -288,20 +288,20 @@ export function Library({ onDeckATrackLoad, onDeckBTrackLoad }: LibraryProps) {
           <h3 className="font-semibold text-xs text-muted-foreground mb-2">GESTURE CONTROLS</h3>
           <div className="space-y-2 text-xs text-muted-foreground">
             <div className="flex items-center gap-2">
-              <div className="w-16 text-right font-mono">Right ✋</div>
+              <div className="w-16 text-right font-mono">Right Hand</div>
               <div className="text-chart-2">→ Deck A</div>
             </div>
             <div className="flex items-center gap-2">
-              <div className="w-16 text-right font-mono">Left ✋</div>
+              <div className="w-16 text-right font-mono">Left Hand</div>
               <div className="text-chart-4">→ Deck B</div>
             </div>
             <div className="border-t border-border pt-2 mt-2 space-y-1">
-              <div>✋ Palm = PLAY</div>
-              <div>✊ Fist = PAUSE</div>
-              <div>🤏 Pinch = Tempo + Filter</div>
-              <div>☝️ 1 finger = Toggle Vocals</div>
-              <div>✌️ 2 fingers = Toggle Backing</div>
-              <div>🖖 3 fingers = Crossfade</div>
+              <div>Palm = PLAY</div>
+              <div>Fist = PAUSE</div>
+              <div>Pinch = Tempo + Filter</div>
+              <div>1 finger = Toggle Vocals</div>
+              <div>2 fingers = Toggle Backing</div>
+              <div>3 fingers = Crossfade</div>
             </div>
           </div>
         </div>

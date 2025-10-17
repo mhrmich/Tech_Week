@@ -319,7 +319,6 @@ export default function App() {
     return (
       <div className="flex h-screen bg-background items-center justify-center">
         <div className="text-center">
-          <div className="text-2xl font-bold text-foreground mb-2">DJ Vision</div>
           <div className="text-muted-foreground">Initializing audio engine...</div>
         </div>
       </div>
@@ -337,35 +336,6 @@ export default function App() {
       <div className="flex-1 flex flex-col gap-6 p-6 overflow-auto">
         {/* Header */}
         <header className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-foreground">DJ Vision</h1>
-            <p className="text-sm text-muted-foreground font-mono">
-              Computer Vision DJ Board
-            </p>
-          </div>
-
-          {/* Gesture Controls Info */}
-          <div className="rounded-lg bg-card border border-border p-3">
-            <p className="text-xs text-muted-foreground mb-2 font-mono">GESTURE CONTROLS</p>
-            <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
-              <div className="flex items-center gap-2">
-                <span className="text-primary">✋</span>
-                <span className="text-muted-foreground">Palm: Play</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-primary">✊</span>
-                <span className="text-muted-foreground">Fist: Pause</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-primary">👌</span>
-                <span className="text-muted-foreground">Pinch: Tempo/Filter</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-primary">☝️</span>
-                <span className="text-muted-foreground">Keys: 1/2 Deck</span>
-              </div>
-            </div>
-          </div>
         </header>
 
         {/* Main Grid Layout */}
@@ -473,17 +443,17 @@ export default function App() {
 function formatGestureEvent(event: DJEvent): string {
   switch (event.type) {
     case 'PLAY':
-      return '▶️ PLAY'
+      return 'PLAY'
     case 'PAUSE':
-      return '⏸️ PAUSE'
+      return 'PAUSE'
     case 'TEMPO_SET':
-      return `⏩ TEMPO: ${event.value.toFixed(2)}x`
+      return `TEMPO: ${event.value.toFixed(2)}x`
     case 'FILTER_SWEEP':
-      return `🎛️ FILTER: ${(event.value * 100).toFixed(0)}%`
+      return `FILTER: ${(event.value * 100).toFixed(0)}%`
     case 'CROSSFADER_SET':
-      return `↔️ CROSSFADER: ${(event.value * 100).toFixed(0)}%`
+      return `CROSSFADER: ${(event.value * 100).toFixed(0)}%`
     case 'STEM_TOGGLE':
-      return `🎚️ ${event.stem.toUpperCase()}: ${event.enabled ? 'ON' : 'OFF'}`
+      return `${event.stem.toUpperCase()}: ${event.enabled ? 'ON' : 'OFF'}`
     default:
       return `Event: ${event.type}`
   }
