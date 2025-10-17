@@ -233,9 +233,9 @@ export async function loadStems(stems: Stems): Promise<void> {
 
     // Load only verified stems
     const loadPromises: Promise<void>[] = [];
-    if (vocalsOk) loadPromises.push(_players.vocals.load(stems.vocals));
-    if (drumsOk) loadPromises.push(_players.drums.load(stems.drums));
-    if (bassOk) loadPromises.push(_players.bass.load(stems.bass));
+    if (vocalsOk) loadPromises.push(_players.vocals.load(stems.vocals).then(() => {}));
+    if (drumsOk) loadPromises.push(_players.drums.load(stems.drums).then(() => {}));
+    if (bassOk) loadPromises.push(_players.bass.load(stems.bass).then(() => {}));
 
     await Promise.all(loadPromises);
 

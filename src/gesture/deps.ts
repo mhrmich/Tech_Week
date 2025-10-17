@@ -38,7 +38,7 @@ export async function checkGestureDeps(): Promise<DepsCheckResult> {
   }
 
   // Check 3: MediaDevices API (for camera access)
-  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+  if (navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function') {
     notes.push('✅ MediaDevices API available');
     console.log('✅ MediaDevices API available');
   } else {
