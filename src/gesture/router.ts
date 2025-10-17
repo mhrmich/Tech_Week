@@ -58,7 +58,9 @@ export function startEventRouter(): () => void {
           break;
 
         case "TEMPO_SET":
-          eng.setTempoFactor(e.value);
+          // Sync tempo across BOTH decks
+          engineA.setTempoFactor(e.value);
+          engineB.setTempoFactor(e.value);
           break;
 
         case "FILTER_SWEEP":

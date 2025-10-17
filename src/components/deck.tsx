@@ -30,7 +30,6 @@ export const Deck = forwardRef<any, DeckProps>(
     const [lowCutHz, setLowCutHz] = useState(20)
     const [highCutHz, setHighCutHz] = useState(20000)
     const [playbackRate, setPlaybackRate] = useState(1.0)
-    const [pitchLock, setPitchLock] = useState(false)
     const [meterData, setMeterData] = useState({ peak: 0, rms: 0 })
 
     const percentToHz = (percent: number): number => {
@@ -44,7 +43,6 @@ export const Deck = forwardRef<any, DeckProps>(
       const savedLowCut = localStorage.getItem(`deck-${deckId}-low-cut`)
       const savedHighCut = localStorage.getItem(`deck-${deckId}-high-cut`)
       const savedPlaybackRate = localStorage.getItem(`deck-${deckId}-playback-rate`)
-      const savedPitchLock = localStorage.getItem(`deck-${deckId}-pitch-lock`)
 
       if (savedLowCut !== null) {
         const percent = Number.parseFloat(savedLowCut)
@@ -64,12 +62,6 @@ export const Deck = forwardRef<any, DeckProps>(
         const rate = Number.parseFloat(savedPlaybackRate)
         setPlaybackRate(rate)
         player.setPlaybackRate(rate)
-      }
-
-      if (savedPitchLock !== null) {
-        const enabled = savedPitchLock === "true"
-        setPitchLock(enabled)
-        player.setPitchLock(enabled)
       }
 
       const updateMeter = () => {
@@ -194,13 +186,6 @@ export const Deck = forwardRef<any, DeckProps>(
       handlePlaybackRateChange(newValue)
     }
 
-    const handlePitchLockToggle = () => {
-      const newValue = !pitchLock
-      setPitchLock(newValue)
-      player.setPitchLock(newValue)
-      localStorage.setItem(`deck-${deckId}-pitch-lock`, newValue.toString())
-    }
-
     useImperativeHandle(ref, () => ({
       handlePlayPause,
       handleSeekBackward,
@@ -209,7 +194,6 @@ export const Deck = forwardRef<any, DeckProps>(
       handleHighCutStep,
       handleBandReset,
       handlePlaybackRateStep,
-      handlePitchLockToggle,
     }))
 
     const formatTime = (seconds: number) => {
@@ -344,18 +328,6 @@ export const Deck = forwardRef<any, DeckProps>(
               aria-label={`Playback rate for deck ${deckId}`}
             />
             <span className="text-xs font-mono text-muted-foreground w-12 text-right">{playbackRate.toFixed(2)}×</span>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <Button
-              variant={pitchLock ? "default" : "outline"}
-              size="sm"
-              onClick={handlePitchLockToggle}
-              className="text-xs font-mono h-7 px-3"
-            >
-              Pitch Lock {pitchLock ? "ON" : "OFF"}
-              <span className="ml-1 text-[10px] opacity-60">(beta)</span>
-            </Button>
           </div>
         </div>
       </div>
