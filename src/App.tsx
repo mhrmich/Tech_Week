@@ -84,6 +84,15 @@ export default function App() {
     try {
       console.log('Starting gesture module...')
 
+      // Resume audio context on user gesture (required by browser autoplay policy)
+      if (audioEngine) {
+        const ctx = (audioEngine as any).context
+        if (ctx && ctx.state === 'suspended') {
+          await ctx.resume()
+          console.log('✅ Audio context resumed')
+        }
+      }
+
       // First set camera started to trigger React re-render
       setCameraStarted(true)
 
@@ -302,6 +311,32 @@ export default function App() {
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
   }, [focusedDeck])
+
+  // Resume audio context on any user interaction (required by browser autoplay policy)
+  useEffect(() => {
+    const resumeAudio = async () => {
+      if (audioEngine) {
+        const ctx = (audioEngine as any).context
+        if (ctx && ctx.state === 'suspended') {
+          try {
+            await ctx.resume()
+            console.log('✅ Audio context resumed on user interaction')
+          } catch (e) {
+            console.warn('Failed to resume audio context:', e)
+          }
+        }
+      }
+    }
+
+    // Add listeners for various user interactions
+    document.addEventListener('click', resumeAudio, { once: true })
+    document.addEventListener('keydown', resumeAudio, { once: true })
+
+    return () => {
+      document.removeEventListener('click', resumeAudio)
+      document.removeEventListener('keydown', resumeAudio)
+    }
+  }, [audioEngine])
 
   // Cleanup on unmount
   useEffect(() => {
