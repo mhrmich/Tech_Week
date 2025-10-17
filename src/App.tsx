@@ -6,8 +6,46 @@ import { Deck } from "./components/deck"
 import { MasterBar } from "./components/master-bar"
 import type { AudioTrack, DeckId } from "./lib/types"
 import { getAudioEngine } from "./lib/audio-context"
+import { GesturePage } from "./gesture/GesturePage"
 
-export default function DJVisionApp() {
+export default function App() {
+  const [activeTab, setActiveTab] = useState<"mixer" | "gesture">("mixer")
+
+  return (
+    <div className="h-screen bg-background">
+      {/* Tab Navigation */}
+      <div className="flex border-b border-border bg-card">
+        <button
+          onClick={() => setActiveTab("mixer")}
+          className={`px-6 py-3 font-medium transition-colors ${
+            activeTab === "mixer"
+              ? "bg-primary text-primary-foreground"
+              : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+          }`}
+        >
+          DJ Mixer
+        </button>
+        <button
+          onClick={() => setActiveTab("gesture")}
+          className={`px-6 py-3 font-medium transition-colors ${
+            activeTab === "gesture"
+              ? "bg-primary text-primary-foreground"
+              : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+          }`}
+        >
+          Gesture Control
+        </button>
+      </div>
+
+      {/* Tab Content */}
+      <div className="h-[calc(100vh-49px)]">
+        {activeTab === "mixer" ? <DJVisionApp /> : <GesturePage />}
+      </div>
+    </div>
+  )
+}
+
+function DJVisionApp() {
   const [tracks, setTracks] = useState<AudioTrack[]>([])
   const [deckATracks, setDeckATracks] = useState<AudioTrack | null>(null)
   const [deckBTracks, setDeckBTracks] = useState<AudioTrack | null>(null)
