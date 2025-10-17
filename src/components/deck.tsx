@@ -1,5 +1,5 @@
-import { useEffect, useState, useImperativeHandle, forwardRef, useRef } from "react"
-import { Volume2, Gauge, Upload } from "lucide-react"
+import { useEffect, useState, useImperativeHandle, forwardRef } from "react"
+import { Volume2, Gauge } from "lucide-react"
 import { Slider } from "@/components/ui/slider"
 import { Button } from "@/components/ui/button"
 import { Transport } from "@/components/transport"
@@ -9,7 +9,6 @@ import type { AudioTrack, DeckId } from "@/lib/types"
 import type { DeckPlayer } from "@/lib/audio-engine"
 import { resumeAudioContext } from "@/lib/audio-context"
 import { cn } from "@/lib/utils"
-import { engineA, engineB } from "@/gesture/index"
 
 interface DeckProps {
   deckId: DeckId
@@ -33,56 +32,9 @@ export const Deck = forwardRef<any, DeckProps>(
     const [pitchLock, setPitchLock] = useState(false)
     const [meterData, setMeterData] = useState({ peak: 0, rms: 0 })
 
-    // Stem upload state
-    const [vocalFile, setVocalFile] = useState<File | null>(null)
-    const [instrumentalFile, setInstrumentalFile] = useState<File | null>(null)
-    const vocalInputRef = useRef<HTMLInputElement>(null)
-    const instrumentalInputRef = useRef<HTMLInputElement>(null)
-
     const percentToHz = (percent: number): number => {
       return 20 * Math.pow(20000 / 20, percent / 100)
     }
-
-    // Stem upload handlers
-    const handleVocalUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0]
-      if (file) {
-        setVocalFile(file)
-        console.log(`📁 Deck ${deckId} - Vocal stem uploaded: ${file.name}`)
-      }
-    }
-
-    const handleInstrumentalUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0]
-      if (file) {
-        setInstrumentalFile(file)
-        console.log(`📁 Deck ${deckId} - Instrumental stem uploaded: ${file.name}`)
-      }
-    }
-
-    // Load stems into Tone.js engine when both files are present
-    useEffect(() => {
-      if (vocalFile && instrumentalFile) {
-        const loadStems = async () => {
-          try {
-            const engine = deckId === "A" ? engineA : engineB
-            const vocalUrl = URL.createObjectURL(vocalFile)
-            const instrumentalUrl = URL.createObjectURL(instrumentalFile)
-
-            console.log(`🎵 Deck ${deckId} - Loading stems...`)
-            await engine.loadStems({
-              vocals: vocalUrl,
-              drums: instrumentalUrl,
-              bass: instrumentalUrl,
-            })
-            console.log(`✅ Deck ${deckId} - Stems loaded successfully!`)
-          } catch (error) {
-            console.error(`❌ Deck ${deckId} - Failed to load stems:`, error)
-          }
-        }
-        loadStems()
-      }
-    }, [vocalFile, instrumentalFile, deckId])
 
     useEffect(() => {
       player.setVolume(volume)
@@ -276,42 +228,6 @@ export const Deck = forwardRef<any, DeckProps>(
           <div className="w-32">
             <VUMeter peak={meterData.peak} rms={meterData.rms} />
           </div>
-        </div>
-
-        {/* Stem Upload Section */}
-        <div className="flex gap-2">
-          <input
-            ref={vocalInputRef}
-            type="file"
-            accept="audio/*"
-            onChange={handleVocalUpload}
-            className="hidden"
-          />
-          <input
-            ref={instrumentalInputRef}
-            type="file"
-            accept="audio/*"
-            onChange={handleInstrumentalUpload}
-            className="hidden"
-          />
-          <Button
-            size="sm"
-            variant={vocalFile ? "default" : "outline"}
-            className="flex-1"
-            onClick={() => vocalInputRef.current?.click()}
-          >
-            <Upload className="w-4 h-4 mr-2" />
-            {vocalFile ? `✅ ${vocalFile.name.slice(0, 15)}...` : '🎤 Upload Vocal'}
-          </Button>
-          <Button
-            size="sm"
-            variant={instrumentalFile ? "default" : "outline"}
-            className="flex-1"
-            onClick={() => instrumentalInputRef.current?.click()}
-          >
-            <Upload className="w-4 h-4 mr-2" />
-            {instrumentalFile ? `✅ ${instrumentalFile.name.slice(0, 15)}...` : '🎸 Upload Backing'}
-          </Button>
         </div>
 
         <Waveform

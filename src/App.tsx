@@ -9,7 +9,6 @@ import { startGestureModule, stopGestureModule, subscribe, type DJEvent } from "
 import * as camera from "./gesture/camera"
 
 export default function App() {
-  const [tracks, setTracks] = useState<AudioTrack[]>([])
   const [deckATracks, setDeckATracks] = useState<AudioTrack | null>(null)
   const [deckBTracks, setDeckBTracks] = useState<AudioTrack | null>(null)
   const [focusedDeck, setFocusedDeck] = useState<DeckId>("A")
@@ -69,14 +68,6 @@ export default function App() {
       audioEngine.setMasterVolume(masterVolume)
     }
   }, [masterVolume, audioEngine])
-
-  const handleTrackSelect = (track: AudioTrack) => {
-    if (focusedDeck === "A") {
-      setDeckATracks(track)
-    } else {
-      setDeckBTracks(track)
-    }
-  }
 
   // Start gesture recognition
   const handleStartGestures = async () => {
@@ -377,7 +368,7 @@ export default function App() {
     <div className="flex h-screen bg-background">
       {/* Left Sidebar - Library */}
       <div className="w-80 flex-shrink-0 border-r border-border">
-        <Library tracks={tracks} onTracksChange={setTracks} onTrackSelect={handleTrackSelect} />
+        <Library onDeckATrackLoad={setDeckATracks} onDeckBTrackLoad={setDeckBTracks} />
       </div>
 
       {/* Main Content */}
