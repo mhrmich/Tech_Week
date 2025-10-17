@@ -154,15 +154,30 @@ export default function App() {
       // Update UI to show last gesture
       setLastGestureEvent(formatGestureEvent(event))
 
-      const currentDeckRef = focusedDeck === "A" ? deckARef : deckBRef
+      // Use the deck from the event (mirrored hand mapping: right→A, left→B)
+      // Fall back to focusedDeck for events without deck field
+      const eventDeck = (event as any).deck || focusedDeck
+      const currentDeckRef = eventDeck === "A" ? deckARef : deckBRef
 
       // Map gesture events to deck controls
       switch (event.type) {
         case 'PLAY':
-          currentDeckRef.current?.handlePlayPause()
+          // Only play if not already playing (don't toggle)
+          if (audioEngine) {
+            const deck = audioEngine.getDeck(eventDeck)
+            if (!deck.isPlaying()) {
+              currentDeckRef.current?.handlePlayPause()
+            }
+          }
           break
         case 'PAUSE':
-          currentDeckRef.current?.handlePlayPause()
+          // Only pause if currently playing (don't toggle)
+          if (audioEngine) {
+            const deck = audioEngine.getDeck(eventDeck)
+            if (deck.isPlaying()) {
+              currentDeckRef.current?.handlePlayPause()
+            }
+          }
           break
         case 'TEMPO_SET':
           // Map tempo to playback rate (0.8-1.2)

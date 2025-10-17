@@ -93,6 +93,94 @@ class DeckPlayerAdapter {
   getState() {
     return this.deck.getState()
   }
+
+  // Direct control methods (used by Deck component)
+  setVolume(volume: number) {
+    this.deck.setMasterGain(volume)
+  }
+
+  setOnTimeUpdate(callback: (time: number) => void) {
+    // Our engines don't have time tracking yet, stub for now
+    console.log(`setOnTimeUpdate called for Deck ${this.deckId}`)
+  }
+
+  setLowCut(percent: number) {
+    // Map percent to filter (0-100 → 0-1)
+    const filterValue = Math.max(0, Math.min(1, 0.5 + (percent / 200)))
+    this.deck.setFilter(filterValue)
+  }
+
+  setHighCut(percent: number) {
+    // Map percent to filter (0-100 → 0-1)
+    const filterValue = Math.max(0, Math.min(1, 0.5 - (percent / 200)))
+    this.deck.setFilter(filterValue)
+  }
+
+  setPlaybackRate(rate: number) {
+    this.deck.setTempoFactor(rate)
+  }
+
+  setPitchLock(enabled: boolean) {
+    console.log(`Pitch lock ${enabled ? 'enabled' : 'disabled'} on Deck ${this.deckId}`)
+    // Our Tone.js implementation doesn't separate pitch from tempo
+  }
+
+  getMeterData(): { peak: number; rms: number } {
+    // Return dummy meter data for now
+    return { peak: 0, rms: 0 }
+  }
+
+  async loadTrack(buffer: AudioBuffer) {
+    console.log(`Loading track on Deck ${this.deckId}`, buffer)
+    // Our system loads via stems, not AudioBuffer
+    // This is a compatibility shim - actual loading happens via gesture system
+  }
+
+  play() {
+    this.deck.play()
+  }
+
+  pause() {
+    this.deck.pause()
+  }
+
+  seek(time: number) {
+    console.log(`Seek to ${time}s on Deck ${this.deckId}`)
+    // Our engines don't expose seek yet
+  }
+
+  resetBand() {
+    this.deck.setFilter(0.5) // Reset to neutral
+  }
+
+  getLowCutFrequency(): number {
+    return 20 // Placeholder
+  }
+
+  getHighCutFrequency(): number {
+    return 20000 // Placeholder
+  }
+
+  getCurrentTime(): number {
+    return 0 // Placeholder - needs time tracking
+  }
+
+  getDuration(): number {
+    return 0 // Placeholder
+  }
+
+  getIsPlaying(): boolean {
+    return this.deck.isPlaying()
+  }
+
+  getPlaybackRate(): number {
+    const state = this.deck.getState()
+    return state.tempoFactor
+  }
+
+  getPitchLock(): boolean {
+    return false // Placeholder
+  }
 }
 
 /**
