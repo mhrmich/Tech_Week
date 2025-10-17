@@ -21,7 +21,9 @@ export default function App() {
   const [gesturesEnabled, setGesturesEnabled] = useState(false)
   const [cameraStarted, setCameraStarted] = useState(false)
   const [lastGestureEvent, setLastGestureEvent] = useState<string>("")
+  const [errorMessage, setErrorMessage] = useState<string>("")
   const videoContainerRef = useRef<HTMLDivElement>(null)
+  const videoElementRef = useRef<HTMLVideoElement | null>(null)
 
   const deckARef = useRef<{
     handlePlayPause: () => void
@@ -78,38 +80,61 @@ export default function App() {
 
   // Start gesture recognition
   const handleStartGestures = async () => {
+    setErrorMessage("")
     try {
       console.log('Starting gesture module...')
+
+      // First set camera started to trigger React re-render
+      setCameraStarted(true)
+
       await startGestureModule({ modelUrl: '/models/hand_landmarker.task' })
 
-      // Get the camera video element and insert it
-      const cameraVideo = camera.getVideoElement()
-      if (videoContainerRef.current) {
-        // Clear container
-        videoContainerRef.current.innerHTML = ''
-        // Add camera video
-        cameraVideo.className = 'w-full h-full object-cover rounded-lg'
-        cameraVideo.style.transform = 'scaleX(-1)' // Mirror for better UX
-        videoContainerRef.current.appendChild(cameraVideo)
-      }
+      // Get the camera video element and insert it after React has rendered
+      setTimeout(() => {
+        const cameraVideo = camera.getVideoElement()
+        videoElementRef.current = cameraVideo
 
-      setCameraStarted(true)
+        if (videoContainerRef.current && cameraVideo) {
+          // Style and add camera video (React has already cleared the placeholder)
+          cameraVideo.className = 'w-full h-full object-cover rounded-lg'
+          cameraVideo.style.transform = 'scaleX(-1)' // Mirror for better UX
+          videoContainerRef.current.appendChild(cameraVideo)
+        }
+      }, 0)
+
       console.log('✅ Gesture module started')
     } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error'
       console.error('Failed to start gestures:', error)
-      alert('Failed to start camera. Make sure you grant camera permissions.')
+      setErrorMessage(`Camera error: ${errorMsg}`)
+      setCameraStarted(false)
     }
   }
 
   // Stop gesture recognition
   const handleStopGestures = () => {
-    stopGestureModule()
-    if (videoContainerRef.current) {
-      videoContainerRef.current.innerHTML = ''
+    try {
+      stopGestureModule()
+
+      // Remove video element if it exists
+      if (videoElementRef.current && videoContainerRef.current) {
+        try {
+          if (videoContainerRef.current.contains(videoElementRef.current)) {
+            videoContainerRef.current.removeChild(videoElementRef.current)
+          }
+        } catch (e) {
+          console.warn('Video element already removed:', e)
+        }
+      }
+      videoElementRef.current = null
+
+      setCameraStarted(false)
+      setGesturesEnabled(false)
+      setLastGestureEvent("")
+      setErrorMessage("")
+    } catch (error) {
+      console.error('Error stopping gestures:', error)
     }
-    setCameraStarted(false)
-    setGesturesEnabled(false)
-    setLastGestureEvent("")
   }
 
   // Subscribe to gesture events
@@ -359,14 +384,16 @@ export default function App() {
               </h3>
 
               {/* Camera Video Container */}
-              <div
-                ref={videoContainerRef}
-                className="w-full aspect-video bg-secondary rounded-lg mb-3 flex items-center justify-center overflow-hidden"
-              >
-                {!cameraStarted && (
-                  <div className="text-center p-4">
+              <div className="w-full aspect-video bg-secondary rounded-lg mb-3 overflow-hidden relative">
+                {!cameraStarted ? (
+                  <div className="absolute inset-0 flex items-center justify-center">
                     <p className="text-muted-foreground text-sm">Camera not started</p>
                   </div>
+                ) : (
+                  <div
+                    ref={videoContainerRef}
+                    className="w-full h-full"
+                  />
                 )}
               </div>
 
@@ -405,6 +432,13 @@ export default function App() {
               {gesturesEnabled && lastGestureEvent && (
                 <div className="mt-3 p-2 bg-secondary rounded text-xs text-muted-foreground font-mono">
                   {lastGestureEvent}
+                </div>
+              )}
+
+              {/* Error Message */}
+              {errorMessage && (
+                <div className="mt-3 p-2 bg-destructive/10 border border-destructive rounded text-xs text-destructive font-mono">
+                  {errorMessage}
                 </div>
               )}
             </div>
