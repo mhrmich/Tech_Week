@@ -1,51 +1,14 @@
 import React from "react"
-
 import { useState, useEffect, useRef } from "react"
 import { Library } from "./components/library"
 import { Deck } from "./components/deck"
 import { MasterBar } from "./components/master-bar"
 import type { AudioTrack, DeckId } from "./lib/types"
 import { getAudioEngine } from "./lib/audio-context"
-import { GesturePage } from "./gesture/GesturePage"
+import { startGestureModule, stopGestureModule, subscribe, type DJEvent } from "./gesture/index"
+import * as camera from "./gesture/camera"
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<"mixer" | "gesture">("mixer")
-
-  return (
-    <div className="h-screen bg-background">
-      {/* Tab Navigation */}
-      <div className="flex border-b border-border bg-card">
-        <button
-          onClick={() => setActiveTab("mixer")}
-          className={`px-6 py-3 font-medium transition-colors ${
-            activeTab === "mixer"
-              ? "bg-primary text-primary-foreground"
-              : "text-muted-foreground hover:text-foreground hover:bg-secondary"
-          }`}
-        >
-          DJ Mixer
-        </button>
-        <button
-          onClick={() => setActiveTab("gesture")}
-          className={`px-6 py-3 font-medium transition-colors ${
-            activeTab === "gesture"
-              ? "bg-primary text-primary-foreground"
-              : "text-muted-foreground hover:text-foreground hover:bg-secondary"
-          }`}
-        >
-          Gesture Control
-        </button>
-      </div>
-
-      {/* Tab Content */}
-      <div className="h-[calc(100vh-49px)]">
-        {activeTab === "mixer" ? <DJVisionApp /> : <GesturePage />}
-      </div>
-    </div>
-  )
-}
-
-function DJVisionApp() {
   const [tracks, setTracks] = useState<AudioTrack[]>([])
   const [deckATracks, setDeckATracks] = useState<AudioTrack | null>(null)
   const [deckBTracks, setDeckBTracks] = useState<AudioTrack | null>(null)
@@ -53,6 +16,12 @@ function DJVisionApp() {
   const [crossfader, setCrossfader] = useState(0.5)
   const [masterVolume, setMasterVolume] = useState(0.8)
   const [audioEngine, setAudioEngine] = useState<any>(null)
+
+  // Gesture control state
+  const [gesturesEnabled, setGesturesEnabled] = useState(false)
+  const [cameraStarted, setCameraStarted] = useState(false)
+  const [lastGestureEvent, setLastGestureEvent] = useState<string>("")
+  const videoContainerRef = useRef<HTMLDivElement>(null)
 
   const deckARef = useRef<{
     handlePlayPause: () => void
@@ -80,8 +49,8 @@ function DJVisionApp() {
     handlePitchLockToggle: () => void
   } | null>(null)
 
+  // Initialize audio engine
   useEffect(() => {
-    // Only initialize audio engine on the client side
     if (typeof window !== 'undefined') {
       setAudioEngine(getAudioEngine())
     }
@@ -107,6 +76,88 @@ function DJVisionApp() {
     }
   }
 
+  // Start gesture recognition
+  const handleStartGestures = async () => {
+    try {
+      console.log('Starting gesture module...')
+      await startGestureModule({ modelUrl: '/models/hand_landmarker.task' })
+
+      // Get the camera video element and insert it
+      const cameraVideo = camera.getVideoElement()
+      if (videoContainerRef.current) {
+        // Clear container
+        videoContainerRef.current.innerHTML = ''
+        // Add camera video
+        cameraVideo.className = 'w-full h-full object-cover rounded-lg'
+        cameraVideo.style.transform = 'scaleX(-1)' // Mirror for better UX
+        videoContainerRef.current.appendChild(cameraVideo)
+      }
+
+      setCameraStarted(true)
+      console.log('✅ Gesture module started')
+    } catch (error) {
+      console.error('Failed to start gestures:', error)
+      alert('Failed to start camera. Make sure you grant camera permissions.')
+    }
+  }
+
+  // Stop gesture recognition
+  const handleStopGestures = () => {
+    stopGestureModule()
+    if (videoContainerRef.current) {
+      videoContainerRef.current.innerHTML = ''
+    }
+    setCameraStarted(false)
+    setGesturesEnabled(false)
+    setLastGestureEvent("")
+  }
+
+  // Subscribe to gesture events
+  useEffect(() => {
+    if (!gesturesEnabled) return
+
+    const unsubscribe = subscribe((event: DJEvent) => {
+      // Update UI to show last gesture
+      setLastGestureEvent(formatGestureEvent(event))
+
+      const currentDeckRef = focusedDeck === "A" ? deckARef : deckBRef
+
+      // Map gesture events to deck controls
+      switch (event.type) {
+        case 'PLAY':
+          currentDeckRef.current?.handlePlayPause()
+          break
+        case 'PAUSE':
+          currentDeckRef.current?.handlePlayPause()
+          break
+        case 'TEMPO_SET':
+          // Map tempo to playback rate (0.8-1.2)
+          currentDeckRef.current?.handlePlaybackRateStep(
+            (event.value - 1.0) * 0.1
+          )
+          break
+        case 'FILTER_SWEEP':
+          // Map filter sweep to low/high cut
+          if (event.value < 0.5) {
+            // Low pass - decrease high cut
+            const delta = (0.5 - event.value) * 10
+            currentDeckRef.current?.handleHighCutStep(-delta)
+          } else {
+            // High pass - decrease low cut
+            const delta = (event.value - 0.5) * 10
+            currentDeckRef.current?.handleLowCutStep(-delta)
+          }
+          break
+        case 'CROSSFADER_SET':
+          setCrossfader(event.value)
+          break
+      }
+    })
+
+    return unsubscribe
+  }, [gesturesEnabled, focusedDeck])
+
+  // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
@@ -227,7 +278,15 @@ function DJVisionApp() {
     return () => window.removeEventListener("keydown", handleKeyDown)
   }, [focusedDeck])
 
-  // Show loading state until audio engine is initialized
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (cameraStarted) {
+        stopGestureModule()
+      }
+    }
+  }, [cameraStarted])
+
   if (!audioEngine) {
     return (
       <div className="flex h-screen bg-background items-center justify-center">
@@ -241,48 +300,49 @@ function DJVisionApp() {
 
   return (
     <div className="flex h-screen bg-background">
-      <div className="w-80 flex-shrink-0">
+      {/* Left Sidebar - Library */}
+      <div className="w-80 flex-shrink-0 border-r border-border">
         <Library tracks={tracks} onTracksChange={setTracks} onTrackSelect={handleTrackSelect} />
       </div>
 
+      {/* Main Content */}
       <div className="flex-1 flex flex-col gap-6 p-6 overflow-auto">
+        {/* Header */}
         <header className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-foreground">DJ Vision</h1>
-            <p className="text-sm text-muted-foreground font-mono">Beta</p>
+            <p className="text-sm text-muted-foreground font-mono">
+              Computer Vision DJ Board
+            </p>
           </div>
+
+          {/* Gesture Controls Info */}
           <div className="rounded-lg bg-card border border-border p-3">
-            <p className="text-xs text-muted-foreground mb-2 font-mono">KEYBOARD SHORTCUTS</p>
+            <p className="text-xs text-muted-foreground mb-2 font-mono">GESTURE CONTROLS</p>
             <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
               <div className="flex items-center gap-2">
-                <kbd className="px-1.5 py-0.5 rounded bg-secondary text-secondary-foreground font-mono">Space</kbd>
-                <span className="text-muted-foreground">Play/Pause</span>
+                <span className="text-primary">✋</span>
+                <span className="text-muted-foreground">Palm: Play</span>
               </div>
               <div className="flex items-center gap-2">
-                <kbd className="px-1.5 py-0.5 rounded bg-secondary text-secondary-foreground font-mono">←/→</kbd>
-                <span className="text-muted-foreground">Seek</span>
+                <span className="text-primary">✊</span>
+                <span className="text-muted-foreground">Fist: Pause</span>
               </div>
               <div className="flex items-center gap-2">
-                <kbd className="px-1.5 py-0.5 rounded bg-secondary text-secondary-foreground font-mono">↑/↓</kbd>
-                <span className="text-muted-foreground">Volume</span>
+                <span className="text-primary">👌</span>
+                <span className="text-muted-foreground">Pinch: Tempo/Filter</span>
               </div>
               <div className="flex items-center gap-2">
-                <kbd className="px-1.5 py-0.5 rounded bg-secondary text-secondary-foreground font-mono">1/2</kbd>
-                <span className="text-muted-foreground">Switch Deck</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <kbd className="px-1.5 py-0.5 rounded bg-secondary text-secondary-foreground font-mono">F</kbd>
-                <span className="text-muted-foreground">Filter Reset</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <kbd className="px-1.5 py-0.5 rounded bg-secondary text-secondary-foreground font-mono">,/.</kbd>
-                <span className="text-muted-foreground">Filter ±5%</span>
+                <span className="text-primary">☝️</span>
+                <span className="text-muted-foreground">Keys: 1/2 Deck</span>
               </div>
             </div>
           </div>
         </header>
 
-        <div className="grid gap-6 lg:grid-cols-2">
+        {/* Main Grid Layout */}
+        <div className="grid gap-6 lg:grid-cols-3">
+          {/* Deck A */}
           <DeckWithControls
             deckId="A"
             track={deckATracks}
@@ -290,6 +350,67 @@ function DJVisionApp() {
             onFocus={() => setFocusedDeck("A")}
             ref={deckARef}
           />
+
+          {/* Camera Feed Panel */}
+          <div className="flex flex-col gap-4">
+            <div className="bg-card border border-border rounded-lg p-4">
+              <h3 className="text-sm font-semibold text-foreground mb-3">
+                Hand Gesture Control
+              </h3>
+
+              {/* Camera Video Container */}
+              <div
+                ref={videoContainerRef}
+                className="w-full aspect-video bg-secondary rounded-lg mb-3 flex items-center justify-center overflow-hidden"
+              >
+                {!cameraStarted && (
+                  <div className="text-center p-4">
+                    <p className="text-muted-foreground text-sm">Camera not started</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Gesture Control Buttons */}
+              <div className="flex gap-2">
+                {!cameraStarted ? (
+                  <button
+                    onClick={handleStartGestures}
+                    className="flex-1 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:opacity-90 transition-opacity text-sm font-medium"
+                  >
+                    Start Camera
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => setGesturesEnabled(!gesturesEnabled)}
+                      className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                        gesturesEnabled
+                          ? 'bg-primary text-primary-foreground'
+                          : 'bg-secondary text-secondary-foreground hover:bg-accent'
+                      }`}
+                    >
+                      {gesturesEnabled ? 'Gestures ON' : 'Enable Gestures'}
+                    </button>
+                    <button
+                      onClick={handleStopGestures}
+                      className="px-4 py-2 bg-destructive text-destructive-foreground rounded-lg hover:opacity-90 transition-opacity text-sm font-medium"
+                    >
+                      Stop
+                    </button>
+                  </>
+                )}
+              </div>
+
+              {/* Last Gesture Event */}
+              {gesturesEnabled && lastGestureEvent && (
+                <div className="mt-3 p-2 bg-secondary rounded text-xs text-muted-foreground font-mono">
+                  {lastGestureEvent}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Deck B */}
           <DeckWithControls
             deckId="B"
             track={deckBTracks}
@@ -299,6 +420,7 @@ function DJVisionApp() {
           />
         </div>
 
+        {/* Master Controls */}
         <MasterBar
           crossfader={crossfader}
           onCrossfaderChange={setCrossfader}
@@ -310,6 +432,27 @@ function DJVisionApp() {
   )
 }
 
+// Helper function to format gesture events for display
+function formatGestureEvent(event: DJEvent): string {
+  switch (event.type) {
+    case 'PLAY':
+      return '▶️ PLAY'
+    case 'PAUSE':
+      return '⏸️ PAUSE'
+    case 'TEMPO_SET':
+      return `⏩ TEMPO: ${event.value.toFixed(2)}x`
+    case 'FILTER_SWEEP':
+      return `🎛️ FILTER: ${(event.value * 100).toFixed(0)}%`
+    case 'CROSSFADER_SET':
+      return `↔️ CROSSFADER: ${(event.value * 100).toFixed(0)}%`
+    case 'STEM_TOGGLE':
+      return `🎚️ ${event.stem.toUpperCase()}: ${event.enabled ? 'ON' : 'OFF'}`
+    default:
+      return `Event: ${event.type}`
+  }
+}
+
+// DeckWithControls component
 const DeckWithControls = React.forwardRef<
   {
     handlePlayPause: () => void
@@ -336,7 +479,6 @@ const DeckWithControls = React.forwardRef<
   const playerRef = useRef<any>(null)
 
   useEffect(() => {
-    // Only initialize audio engine on the client side
     if (typeof window !== 'undefined') {
       const engine = getAudioEngine()
       setAudioEngine(engine)
@@ -393,7 +535,6 @@ const DeckWithControls = React.forwardRef<
     },
   }))
 
-  // Show loading state until audio engine is initialized
   if (!audioEngine || !player) {
     return (
       <div className="flex items-center justify-center h-64 bg-card rounded-lg border border-border">
