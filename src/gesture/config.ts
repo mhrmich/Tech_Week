@@ -13,7 +13,9 @@ export type GestureConfig = {
   continuousHz: number; // Hz for continuous events (pinch2D)
   transportHoldMs: number; // palm/fist hold duration to trigger PLAY/PAUSE
   transportCooldownMs: number; // cooldown after transport event fires
+  stemToggleHoldMs: number; // hold duration to trigger stem toggle
   stemToggleDebounceMs: number; // debounce for stem toggle events
+  pinchActivationMs: number; // hold duration before pinch starts controlling
   transportDebounceMs: number; // deprecated, kept for compatibility
   padsDebounceMs: number; // deprecated, kept for compatibility
 
@@ -52,7 +54,9 @@ export const defaultConfig: Readonly<GestureConfig> = Object.freeze({
   continuousHz: 15,
   transportHoldMs: 600,
   transportCooldownMs: 800,
+  stemToggleHoldMs: 400,
   stemToggleDebounceMs: 300,
+  pinchActivationMs: 100,
   transportDebounceMs: 250, // deprecated
   padsDebounceMs: 300, // deprecated
   tempoMin: 0.8,

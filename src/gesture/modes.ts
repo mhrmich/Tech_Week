@@ -29,6 +29,9 @@ export class GestureModes {
   private lastTransportState: "palm" | "fist" | null = null;
   private lastTransportEmit = 0;
 
+  // Pinch activation tracking
+  private pinchStartTime: number | null = null;
+
   // Stem toggle state (track which stems are enabled)
   private stemStates = {
     vocals: true,
@@ -37,6 +40,9 @@ export class GestureModes {
   };
   private lastStemFingerCount = 0;
   private lastStemToggle = 0;
+  private stemHoldStartTime: number | null = null;
+  private stemHoldFingerCount: number | null = null;
+  private stemToggleFired: boolean = false; // Track if toggle already fired for current hold
 
   /**
    * Update gesture mode based on hand detection.
@@ -68,23 +74,35 @@ export class GestureModes {
       this.transportHoldStartTime = null;
       this.lastTransportState = null;
       this.lastStemFingerCount = 0;
+      this.stemHoldStartTime = null;
+      this.stemHoldFingerCount = null;
+      this.stemToggleFired = false;
     } else if (p.palm || p.fist) {
       // Priority 2: Transport mode (with hold + cooldown)
       this.mode = "transport";
       this.handleTransport(p.palm, p.fist);
       this.lastStemFingerCount = 0;
+      this.pinchStartTime = null;
+      this.stemHoldStartTime = null;
+      this.stemHoldFingerCount = null;
+      this.stemToggleFired = false;
     } else if (p.fingerCount >= 1 && p.fingerCount <= 3) {
       // Priority 3: Stems mode (1 or 2 fingers; 3 fingers ignored)
       this.mode = "stems";
       this.handleStems(p.fingerCount);
-      // Reset transport state when in stems
+      // Reset transport and pinch state when in stems
       this.transportHoldStartTime = null;
       this.lastTransportState = null;
+      this.pinchStartTime = null;
     } else {
       // No gesture detected - reset state
       this.transportHoldStartTime = null;
       this.lastTransportState = null;
       this.lastStemFingerCount = 0;
+      this.pinchStartTime = null;
+      this.stemHoldStartTime = null;
+      this.stemHoldFingerCount = null;
+      this.stemToggleFired = false;
     }
 
     // Update previous positions for next frame (if in continuous mode)
@@ -154,6 +172,7 @@ export class GestureModes {
    * Pinch2D mode: continuous TEMPO_SET + FILTER_SWEEP.
    * - Vertical indexTip.y (absolute camera position) → TEMPO_SET
    * - Horizontal thumbTip.x (absolute camera position) → FILTER_SWEEP
+   * Requires holding pinch for pinchActivationMs before activating.
    * Rate-limited based on config.
    */
   private handlePinch2D(
@@ -162,6 +181,18 @@ export class GestureModes {
   ): void {
     const cfg = getConfig();
     const now = performance.now();
+
+    // Track pinch start time
+    if (this.pinchStartTime === null) {
+      this.pinchStartTime = now;
+      return; // Wait for hold threshold
+    }
+
+    // Check if pinch has been held long enough
+    const holdDuration = now - this.pinchStartTime;
+    if (holdDuration < cfg.pinchActivationMs) {
+      return; // Still waiting for activation threshold
+    }
 
     // Rate limit continuous events
     const intervalMs = 1000 / cfg.continuousHz;
@@ -196,7 +227,8 @@ export class GestureModes {
    * 1 finger → vocals
    * 2 fingers → instrumental (drums + bass together)
    * 3 fingers → nothing (ignored)
-   * Debounced to prevent spam when holding the same count.
+   * Requires holding for stemToggleHoldMs before toggling.
+   * Only toggles ONCE per continuous hold - must release and hold again to toggle back.
    */
   private handleStems(fingerCount: number): void {
     const cfg = getConfig();
@@ -205,33 +237,50 @@ export class GestureModes {
     // Only handle 1 or 2 fingers (3 fingers does nothing)
     if (fingerCount < 1 || fingerCount > 2) return;
 
-    // Check debounce
-    if (fingerCount === this.lastStemFingerCount && now - this.lastStemToggle < cfg.stemToggleDebounceMs) {
-      // Same count, still within debounce window
+    // If finger count changed, reset hold tracking
+    if (fingerCount !== this.stemHoldFingerCount) {
+      this.stemHoldStartTime = now;
+      this.stemHoldFingerCount = fingerCount;
+      this.stemToggleFired = false; // Reset toggle flag for new gesture
       return;
     }
 
-    // If finger count changed or debounce expired, emit toggle
-    if (fingerCount !== this.lastStemFingerCount) {
-      if (fingerCount === 1) {
-        // Toggle vocals
-        this.stemStates.vocals = !this.stemStates.vocals;
-        emit({ type: "STEM_TOGGLE", stem: "vocals", enabled: this.stemStates.vocals });
-      } else if (fingerCount === 2) {
-        // Toggle instrumental (drums + bass together)
-        const newState = !this.stemStates.drums; // Use drums state to track instrumental
-        this.stemStates.drums = newState;
-        this.stemStates.bass = newState;
-
-        // Emit both events
-        emit({ type: "STEM_TOGGLE", stem: "drums", enabled: newState });
-        emit({ type: "STEM_TOGGLE", stem: "bass", enabled: newState });
-      }
-
-      // Update tracking
-      this.lastStemFingerCount = fingerCount;
-      this.lastStemToggle = now;
+    // If toggle already fired for this hold, don't toggle again
+    if (this.stemToggleFired) {
+      return; // Wait until gesture is released and re-held
     }
+
+    // Check if hold duration met
+    if (this.stemHoldStartTime === null) {
+      this.stemHoldStartTime = now;
+      return;
+    }
+
+    const holdDuration = now - this.stemHoldStartTime;
+    if (holdDuration < cfg.stemToggleHoldMs) {
+      return; // Still holding, not long enough yet
+    }
+
+    // Hold threshold met - emit toggle ONCE
+    if (fingerCount === 1) {
+      // Toggle vocals
+      this.stemStates.vocals = !this.stemStates.vocals;
+      emit({ type: "STEM_TOGGLE", stem: "vocals", enabled: this.stemStates.vocals });
+    } else if (fingerCount === 2) {
+      // Toggle instrumental (drums + bass together)
+      const newState = !this.stemStates.drums;
+      this.stemStates.drums = newState;
+      this.stemStates.bass = newState;
+
+      // Emit both events
+      emit({ type: "STEM_TOGGLE", stem: "drums", enabled: newState });
+      emit({ type: "STEM_TOGGLE", stem: "bass", enabled: newState });
+    }
+
+    // Mark toggle as fired - prevents repeated toggling while holding
+    this.stemToggleFired = true;
+    this.lastStemFingerCount = fingerCount;
+    this.lastStemToggle = now;
   }
 
   /**
