@@ -44,18 +44,33 @@ export const Deck = forwardRef<any, DeckProps>(
       const savedHighCut = localStorage.getItem(`deck-${deckId}-high-cut`)
       const savedPlaybackRate = localStorage.getItem(`deck-${deckId}-playback-rate`)
 
+      const engine = deckId === "A" ? engineA : engineB
+      let lowCut = 0
+      let highCut = 100
+
       if (savedLowCut !== null) {
         const percent = Number.parseFloat(savedLowCut)
+        lowCut = percent
         setLowCutPercent(percent)
         setLowCutHz(percentToHz(percent))
-        player.setLowCut(percent)
       }
 
       if (savedHighCut !== null) {
         const percent = Number.parseFloat(savedHighCut)
+        highCut = percent
         setHighCutPercent(percent)
         setHighCutHz(percentToHz(percent))
-        player.setHighCut(percent)
+      }
+
+      // Calculate and set initial engine filter value from saved sliders
+      if (lowCut > 0) {
+        const filterValue = 0.5 + (lowCut / 75) * 0.5
+        engine.setFilter(filterValue)
+      } else if (highCut < 100) {
+        const filterValue = ((highCut - 25) / 75) * 0.5
+        engine.setFilter(Math.max(0, filterValue))
+      } else {
+        engine.setFilter(0.5)
       }
 
       if (savedPlaybackRate !== null) {
@@ -88,6 +103,25 @@ export const Deck = forwardRef<any, DeckProps>(
       player.setVolume(volume)
     }, [volume, player])
 
+    // Helper: Map filter value (0-1) to UI slider percentages
+    const mapFilterToSliders = (filterValue: number): { lowCut: number, highCut: number } => {
+      if (filterValue < 0.5) {
+        // Lowpass mode: cut highs, keep lows
+        const t = filterValue / 0.5; // 0-1 within lowpass range
+        return {
+          lowCut: 0,
+          highCut: 25 + (75 * t) // 25% to 100%
+        };
+      } else {
+        // Highpass mode: cut lows, keep highs
+        const t = (filterValue - 0.5) / 0.5; // 0-1 within highpass range
+        return {
+          lowCut: 75 * t, // 0% to 75%
+          highCut: 100
+        };
+      }
+    };
+
     // Poll engine state to sync UI with gesture-controlled engines
     useEffect(() => {
       const engine = deckId === "A" ? engineA : engineB
@@ -98,17 +132,28 @@ export const Deck = forwardRef<any, DeckProps>(
           setIsPlaying(actualIsPlaying)
         }
 
-        // Also sync playback rate display
+        // Sync playback rate display
         const state = engine.getState()
         if (Math.abs(state.tempoFactor - playbackRate) > 0.01) {
           setPlaybackRate(state.tempoFactor)
+        }
+
+        // Sync filter sliders with engine filter value
+        const sliders = mapFilterToSliders(state.filter)
+        if (Math.abs(sliders.lowCut - lowCutPercent) > 1) {
+          setLowCutPercent(sliders.lowCut)
+          setLowCutHz(percentToHz(sliders.lowCut))
+        }
+        if (Math.abs(sliders.highCut - highCutPercent) > 1) {
+          setHighCutPercent(sliders.highCut)
+          setHighCutHz(percentToHz(sliders.highCut))
         }
       }
 
       // Poll every 100ms to keep UI in sync
       const interval = setInterval(pollState, 100)
       return () => clearInterval(interval)
-    }, [deckId, isPlaying, playbackRate])
+    }, [deckId, isPlaying, playbackRate, lowCutPercent, highCutPercent])
 
     const handlePlayPause = () => {
       if (!track) return
@@ -143,7 +188,22 @@ export const Deck = forwardRef<any, DeckProps>(
       const clampedValue = Math.min(value, highCutPercent - 1)
       setLowCutPercent(clampedValue)
       setLowCutHz(percentToHz(clampedValue))
-      player.setLowCut(clampedValue)
+
+      // Map sliders back to filter value and update engine
+      const engine = deckId === "A" ? engineA : engineB
+      if (clampedValue > 0) {
+        // Low-cut active = highpass mode (filter > 0.5)
+        const filterValue = 0.5 + (clampedValue / 75) * 0.5 // Map 0-75% to 0.5-1.0
+        engine.setFilter(filterValue)
+      } else if (highCutPercent < 100) {
+        // Only high-cut active = lowpass mode (filter < 0.5)
+        const filterValue = ((highCutPercent - 25) / 75) * 0.5 // Map 25-100% to 0.0-0.5
+        engine.setFilter(Math.max(0, filterValue))
+      } else {
+        // Both neutral = center position
+        engine.setFilter(0.5)
+      }
+
       localStorage.setItem(`deck-${deckId}-low-cut`, clampedValue.toString())
     }
 
@@ -151,7 +211,22 @@ export const Deck = forwardRef<any, DeckProps>(
       const clampedValue = Math.max(value, lowCutPercent + 1)
       setHighCutPercent(clampedValue)
       setHighCutHz(percentToHz(clampedValue))
-      player.setHighCut(clampedValue)
+
+      // Map sliders back to filter value and update engine
+      const engine = deckId === "A" ? engineA : engineB
+      if (lowCutPercent > 0) {
+        // Low-cut active = highpass mode (filter > 0.5)
+        const filterValue = 0.5 + (lowCutPercent / 75) * 0.5 // Map 0-75% to 0.5-1.0
+        engine.setFilter(filterValue)
+      } else if (clampedValue < 100) {
+        // Only high-cut active = lowpass mode (filter < 0.5)
+        const filterValue = ((clampedValue - 25) / 75) * 0.5 // Map 25-100% to 0.0-0.5
+        engine.setFilter(Math.max(0, filterValue))
+      } else {
+        // Both neutral = center position
+        engine.setFilter(0.5)
+      }
+
       localStorage.setItem(`deck-${deckId}-high-cut`, clampedValue.toString())
     }
 
@@ -170,7 +245,11 @@ export const Deck = forwardRef<any, DeckProps>(
       setHighCutPercent(100)
       setLowCutHz(20)
       setHighCutHz(20000)
-      player.resetBand()
+
+      // Reset engine filter to neutral
+      const engine = deckId === "A" ? engineA : engineB
+      engine.setFilter(0.5)
+
       localStorage.setItem(`deck-${deckId}-low-cut`, "0")
       localStorage.setItem(`deck-${deckId}-high-cut`, "100")
     }
