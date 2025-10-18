@@ -4,7 +4,7 @@ A revolutionary DJ control system that uses hand gestures and computer vision to
 
 ## Team Members
 
-- Sam
+- Sam Doane
 - Matthew Hrmich
 
 ## Project Overview
