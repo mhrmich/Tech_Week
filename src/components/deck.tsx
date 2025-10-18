@@ -148,11 +148,20 @@ export const Deck = forwardRef<any, DeckProps>(
           setHighCutPercent(sliders.highCut)
           setHighCutHz(percentToHz(sliders.highCut))
         }
+
+        // Update current time from engine (this drives the progress bar animation!)
+        const offsetSeconds = engine.getOffsetSeconds()
+        setCurrentTime(offsetSeconds)
       }
 
-      // Poll every 100ms to keep UI in sync
-      const interval = setInterval(pollState, 100)
-      return () => clearInterval(interval)
+      // Use requestAnimationFrame for smooth 60fps updates
+      let rafId: number
+      const animate = () => {
+        pollState()
+        rafId = requestAnimationFrame(animate)
+      }
+      rafId = requestAnimationFrame(animate)
+      return () => cancelAnimationFrame(rafId)
     }, [deckId, isPlaying, playbackRate, lowCutPercent, highCutPercent])
 
     const handlePlayPause = () => {
@@ -338,6 +347,9 @@ export const Deck = forwardRef<any, DeckProps>(
           />
           <span className="text-xs font-mono text-muted-foreground w-12 text-right">
             {formatTime(track?.duration || 0)}
+          </span>
+          <span className="text-xs font-mono font-semibold text-primary w-12 text-center">
+            {track ? `${Math.round((currentTime / track.duration) * 100)}%` : "--"}
           </span>
         </div>
 

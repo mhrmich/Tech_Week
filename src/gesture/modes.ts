@@ -37,10 +37,9 @@ class HandState {
 
   // Stem toggle tracking
   stemStates = { vocals: true, drums: true, bass: true };
-  lastStemFingerCount = 0;
-  lastStemToggle = 0;
   stemHoldStartTime: number | null = null;
   stemHoldFingerCount: number | null = null;
+  stemGestureActive: boolean = false; // Tracks if gesture cycle is active (prevents re-trigger while held)
 
   // Blend tracking (3-finger mode for right hand → Deck B)
   blendActive: boolean = false;
@@ -82,6 +81,7 @@ class HandState {
       this.lastTransportState = null;
       this.stemHoldStartTime = null;
       this.stemHoldFingerCount = null;
+      this.stemGestureActive = false;
       this.blendActive = false;
       this.blendHoldStartTime = null;
       return;
@@ -95,6 +95,7 @@ class HandState {
       this.pinchStartTime = null;
       this.stemHoldStartTime = null;
       this.stemHoldFingerCount = null;
+      this.stemGestureActive = false;
       this.blendActive = false;
       this.blendHoldStartTime = null;
       return;
@@ -111,6 +112,7 @@ class HandState {
       this.lastTransportState = null;
       this.stemHoldStartTime = null;
       this.stemHoldFingerCount = null;
+      this.stemGestureActive = false;
       return;
     }
 
@@ -133,8 +135,31 @@ class HandState {
     this.lastTransportState = null;
     this.stemHoldStartTime = null;
     this.stemHoldFingerCount = null;
+    this.stemGestureActive = false;
     this.blendActive = false;
     this.blendHoldStartTime = null;
+  }
+
+  /**
+   * Reset gesture tracking when hand is no longer detected.
+   * Keeps stem states but clears active gesture timers.
+   */
+  resetGestureTracking(): void {
+    this.mode = "idle";
+    this.pinchStartTime = null;
+    this.prevThumbTip = null;
+    this.lastContinuousEmit = 0;
+    this.transportHoldStartTime = null;
+    this.lastTransportState = null;
+    this.lastTransportEmit = 0;
+    this.stemHoldStartTime = null;
+    this.stemHoldFingerCount = null;
+    this.stemGestureActive = false; // CRITICAL: Reset so next gesture can fire
+    this.blendActive = false;
+    this.blendHoldStartTime = null;
+    this.blendValue = 0.5;
+    this.lastBlendEmit = 0;
+    // NOTE: stemStates are NOT reset - they persist across hand detection gaps
   }
 
   /**
@@ -310,8 +335,13 @@ class HandState {
    * Stems mode: toggle stems based on finger count.
    * 1 finger → vocals
    * 2 fingers → instrumental (drums + bass together)
-   * Requires holding for stemToggleHoldMs before toggling.
-   * Uses cooldown to allow repeated toggles without releasing.
+   *
+   * State-machine approach:
+   * - Gesture must be held for stemToggleHoldMs (150ms) before firing
+   * - Toggle fires exactly once per gesture cycle
+   * - While stemGestureActive=true, no further toggles occur (prevents re-trigger)
+   * - Gesture ends when hand returns to idle or enters different mode
+   * - No cooldown needed - state machine handles all timing cleanly
    */
   private handleStems(fingerCount: number, now: number): void {
     const cfg = getConfig();
@@ -319,30 +349,33 @@ class HandState {
     // Only handle 1 or 2 fingers
     if (fingerCount < 1 || fingerCount > 2) return;
 
-    // Check cooldown to prevent rapid toggling
-    const cooldownMs = 800; // 800ms cooldown between toggles
-    if (now - this.lastStemToggle < cooldownMs) {
+    // If gesture already active (toggle already fired this cycle), block further toggles
+    if (this.stemGestureActive) {
       return;
     }
 
-    // If finger count changed, reset hold tracking
+    // Gesture not active yet - check hold threshold
+
+    // If finger count changed during hold, restart hold timer for stability
     if (fingerCount !== this.stemHoldFingerCount) {
       this.stemHoldStartTime = now;
       this.stemHoldFingerCount = fingerCount;
       return;
     }
 
+    // Initialize hold timer if not started
     if (this.stemHoldStartTime === null) {
       this.stemHoldStartTime = now;
       return;
     }
 
+    // Check if hold threshold met
     const holdDuration = now - this.stemHoldStartTime;
     if (holdDuration < cfg.stemToggleHoldMs) {
-      return;
+      return; // Still holding, threshold not met yet
     }
 
-    // Hold threshold met - emit toggle with deck tag
+    // Hold threshold met - fire toggle and activate gesture lock
     if (fingerCount === 1) {
       // Toggle vocals
       this.stemStates.vocals = !this.stemStates.vocals;
@@ -364,10 +397,9 @@ class HandState {
       console.log(`🎸 [${this.deck}] Instrumental: ${newState ? "ON" : "OFF"}`);
     }
 
-    this.lastStemFingerCount = fingerCount;
-    this.lastStemToggle = now;
-    // Reset hold timer to require hold again for next toggle
-    this.stemHoldStartTime = now;
+    // Mark gesture as active to prevent re-triggering while held
+    // This flag will be reset when hand goes to idle or enters different mode
+    this.stemGestureActive = true;
   }
 }
 
@@ -404,10 +436,11 @@ export class GestureModes {
       activeHands.add(handedness);
     }
 
-    // Clean up hands that are no longer detected
-    for (const [key, _] of this.hands) {
+    // Reset gesture tracking for hands that are no longer detected
+    // IMPORTANT: We keep the HandState to preserve stem states, but reset gesture timers
+    for (const [key, handState] of this.hands) {
       if (!activeHands.has(key)) {
-        this.hands.delete(key);
+        handState.resetGestureTracking();
       }
     }
   }

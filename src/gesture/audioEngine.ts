@@ -689,6 +689,54 @@ export function autoSyncTempoIfEnabled(): void {
   }
 }
 
+/**
+ * BPM storage for each deck
+ */
+let deckABpm: number | undefined;
+let deckBBpm: number | undefined;
+
+/**
+ * Set the BPM for a deck
+ */
+export function setDeckBpm(deck: "A" | "B", bpm: number | undefined): void {
+  if (deck === "A") {
+    deckABpm = bpm;
+  } else {
+    deckBBpm = bpm;
+  }
+  console.log(`🎵 Deck ${deck} BPM set to: ${bpm || "not specified"}`);
+}
+
+/**
+ * Sync Deck B's tempo to match Deck A's BPM.
+ * If both BPMs are specified, calculates the tempo ratio to match BPMs.
+ * Otherwise, falls back to copying Deck A's current tempo factor.
+ */
+export function syncTempoBWithBpm(): void {
+  if (!engineA.isLoaded()) {
+    console.warn("⚠️ syncTempoBWithBpm: Deck A not loaded");
+    return;
+  }
+
+  if (!engineB.isLoaded()) {
+    console.warn("⚠️ syncTempoBWithBpm: Deck B not loaded");
+    return;
+  }
+
+  // If both BPMs are specified, calculate tempo factor based on BPM ratio
+  if (deckABpm && deckBBpm) {
+    const currentTempoA = engineA.getTempoFactor();
+    const bpmRatio = deckABpm / deckBBpm;
+    const newTempoB = currentTempoA * bpmRatio;
+
+    engineB.setTempoFactor(newTempoB);
+    console.log(`🔗 BPM Sync: Deck B tempo set to ${newTempoB.toFixed(2)}x (${deckBBpm} BPM → ${deckABpm} BPM)`);
+  } else {
+    // Fall back to standard tempo sync (just copy tempo factor)
+    syncTempoB();
+  }
+}
+
 // Expose for console testing
 if (import.meta.env.DEV) {
   (globalThis as any).__decks = { A: engineA, B: engineB };

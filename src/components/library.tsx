@@ -1,6 +1,7 @@
 import { useState, useRef } from "react"
 import { Upload, Music } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import { engineA, engineB } from "@/gesture/index"
 import { getAudioContext } from "@/lib/audio-context"
@@ -8,20 +9,22 @@ import { generatePeaks } from "@/lib/audio-engine"
 import type { AudioTrack, DeckId } from "@/lib/types"
 
 interface LibraryProps {
-  onDeckATrackLoad: (track: AudioTrack) => void
-  onDeckBTrackLoad: (track: AudioTrack) => void
+  onDeckATrackLoad: (track: AudioTrack, bpm?: number) => void
+  onDeckBTrackLoad: (track: AudioTrack, bpm?: number) => void
 }
 
 export function Library({ onDeckATrackLoad, onDeckBTrackLoad }: LibraryProps) {
   // Deck A stem state
   const [vocalFileA, setVocalFileA] = useState<File | null>(null)
   const [backingFileA, setBackingFileA] = useState<File | null>(null)
+  const [bpmA, setBpmA] = useState<string>("")
   const vocalInputRefA = useRef<HTMLInputElement>(null)
   const backingInputRefA = useRef<HTMLInputElement>(null)
 
   // Deck B stem state
   const [vocalFileB, setVocalFileB] = useState<File | null>(null)
   const [backingFileB, setBackingFileB] = useState<File | null>(null)
+  const [bpmB, setBpmB] = useState<string>("")
   const vocalInputRefB = useRef<HTMLInputElement>(null)
   const backingInputRefB = useRef<HTMLInputElement>(null)
 
@@ -52,7 +55,8 @@ export function Library({ onDeckATrackLoad, onDeckBTrackLoad }: LibraryProps) {
         peaks,
         duration: backingBuffer.duration,
       }
-      onDeckATrackLoad(track)
+      const bpmValue = bpmA ? parseFloat(bpmA) : undefined
+      onDeckATrackLoad(track, bpmValue)
     } catch (error) {
       console.error(`❌ Deck A - Failed to load stems:`, error)
     }
@@ -85,7 +89,8 @@ export function Library({ onDeckATrackLoad, onDeckBTrackLoad }: LibraryProps) {
         peaks,
         duration: backingBuffer.duration,
       }
-      onDeckBTrackLoad(track)
+      const bpmValue = bpmB ? parseFloat(bpmB) : undefined
+      onDeckBTrackLoad(track, bpmValue)
     } catch (error) {
       console.error(`❌ Deck B - Failed to load stems:`, error)
     }
@@ -207,6 +212,20 @@ export function Library({ onDeckATrackLoad, onDeckBTrackLoad }: LibraryProps) {
               )}
             </Button>
 
+            {/* BPM Input A */}
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-mono text-muted-foreground whitespace-nowrap">BPM:</label>
+              <Input
+                type="number"
+                placeholder="120"
+                value={bpmA}
+                onChange={(e) => setBpmA(e.target.value)}
+                className="h-8 text-xs"
+                min="60"
+                max="200"
+              />
+            </div>
+
             {vocalFileA && backingFileA && (
               <div className="flex items-center gap-2 p-2 bg-green-500/10 rounded-md">
                 <Music className="w-4 h-4 text-green-500" />
@@ -271,6 +290,20 @@ export function Library({ onDeckATrackLoad, onDeckBTrackLoad }: LibraryProps) {
                 "Upload Backing"
               )}
             </Button>
+
+            {/* BPM Input B */}
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-mono text-muted-foreground whitespace-nowrap">BPM:</label>
+              <Input
+                type="number"
+                placeholder="120"
+                value={bpmB}
+                onChange={(e) => setBpmB(e.target.value)}
+                className="h-8 text-xs"
+                min="60"
+                max="200"
+              />
+            </div>
 
             {vocalFileB && backingFileB && (
               <div className="flex items-center gap-2 p-2 bg-green-500/10 rounded-md">

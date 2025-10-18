@@ -5,7 +5,7 @@ import { Deck } from "./components/deck"
 import { MasterBar } from "./components/master-bar"
 import type { AudioTrack, DeckId } from "./lib/types"
 import { getAudioEngine } from "./lib/audio-context"
-import { startGestureModule, stopGestureModule, subscribe, type DJEvent } from "./gesture/index"
+import { startGestureModule, stopGestureModule, subscribe, type DJEvent, setDeckBpm, syncTempoBWithBpm } from "./gesture/index"
 import * as camera from "./gesture/camera"
 
 export default function App() {
@@ -15,6 +15,10 @@ export default function App() {
   const [crossfader, setCrossfader] = useState(0.5)
   const [masterVolume, setMasterVolume] = useState(0.8)
   const [audioEngine, setAudioEngine] = useState<any>(null)
+
+  // BPM tracking
+  const [deckABpm, setDeckABpm] = useState<number | undefined>(undefined)
+  const [deckBBpm, setDeckBBpm] = useState<number | undefined>(undefined)
 
   // Gesture control state
   const [gesturesEnabled, setGesturesEnabled] = useState(false)
@@ -330,7 +334,22 @@ export default function App() {
     <div className="flex h-screen bg-background">
       {/* Left Sidebar - Library */}
       <div className="w-80 flex-shrink-0 border-r border-border">
-        <Library onDeckATrackLoad={setDeckATracks} onDeckBTrackLoad={setDeckBTracks} />
+        <Library
+          onDeckATrackLoad={(track, bpm) => {
+            setDeckATracks(track)
+            setDeckABpm(bpm)
+            setDeckBpm("A", bpm)
+          }}
+          onDeckBTrackLoad={(track, bpm) => {
+            setDeckBTracks(track)
+            setDeckBBpm(bpm)
+            setDeckBpm("B", bpm)
+            // Auto-sync Deck B to Deck A when Deck B loads
+            setTimeout(() => {
+              syncTempoBWithBpm()
+            }, 100)
+          }}
+        />
       </div>
 
       {/* Main Content */}

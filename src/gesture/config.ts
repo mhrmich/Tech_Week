@@ -69,7 +69,7 @@ export const defaultConfig: Readonly<GestureConfig> = Object.freeze({
   continuousHz: 15,
   transportHoldMs: 600,
   transportCooldownMs: 800,
-  stemToggleHoldMs: 400,
+  stemToggleHoldMs: 150, // Reduced from 400ms to 150ms for faster response
   stemToggleDebounceMs: 300,
   pinchActivationMs: 100,
   transportDebounceMs: 250, // deprecated

@@ -141,5 +141,7 @@ export {
   syncTempoA,
   syncTempoB,
   autoSyncTempoIfEnabled,
+  setDeckBpm,
+  syncTempoBWithBpm,
 } from "./audioEngine";
 export type { Stems, TrackSource } from "./audioEngine";

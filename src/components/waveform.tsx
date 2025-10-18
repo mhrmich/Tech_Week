@@ -34,6 +34,7 @@ export function Waveform({ peaks, currentTime, duration, onSeek }: WaveformProps
 
     ctx.clearRect(0, 0, width, height)
 
+    // Draw waveform bars
     peaks.forEach((peak, i) => {
       const barHeight = peak * height * 0.8
       const x = i * barWidth
@@ -41,17 +42,35 @@ export function Waveform({ peaks, currentTime, duration, onSeek }: WaveformProps
 
       const isPast = i / peaks.length < progress
 
-      ctx.fillStyle = isPast ? "oklch(0.75 0.15 195)" : "oklch(0.35 0.01 240)"
+      // Played portion: bright blue, unplayed: dark gray
+      ctx.fillStyle = isPast ? "hsl(200, 80%, 60%)" : "hsl(220, 10%, 30%)"
 
       ctx.fillRect(x, y, Math.max(barWidth - 1, 1), barHeight)
     })
 
+    // Draw progress overlay (gradient from left showing played portion)
     const progressX = progress * width
-    ctx.strokeStyle = "oklch(0.95 0.01 240)"
-    ctx.lineWidth = 2
+    const gradient = ctx.createLinearGradient(0, 0, progressX, 0)
+    gradient.addColorStop(0, "rgba(59, 130, 246, 0.2)")
+    gradient.addColorStop(1, "rgba(59, 130, 246, 0.4)")
+    ctx.fillStyle = gradient
+    ctx.fillRect(0, 0, progressX, height)
+
+    // Draw playhead line (bright and thick)
+    ctx.strokeStyle = "hsl(200, 100%, 70%)"
+    ctx.lineWidth = 3
     ctx.beginPath()
     ctx.moveTo(progressX, 0)
     ctx.lineTo(progressX, height)
+    ctx.stroke()
+
+    // Draw playhead circle at top
+    ctx.fillStyle = "hsl(200, 100%, 70%)"
+    ctx.beginPath()
+    ctx.arc(progressX, 8, 6, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.strokeStyle = "white"
+    ctx.lineWidth = 2
     ctx.stroke()
   }, [peaks, currentTime, duration])
 

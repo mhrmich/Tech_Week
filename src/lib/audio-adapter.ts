@@ -214,6 +214,12 @@ class AudioEngineAdapter {
     console.log(`Master volume: ${value.toFixed(2)}`)
   }
 
+  getMasterMeterData(): { peak: number; rms: number } {
+    // Return placeholder meter data
+    // In a full implementation, this would read from a master bus analyser
+    return { peak: 0, rms: 0 }
+  }
+
   // Expose our engines for advanced use
   get engineA() {
     return engineA
